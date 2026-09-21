@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.env
+.env.*
+!.env.example
+*.local
+
+# Backend Supabase của project này: giữ riêng, không đưa lên repo công khai.
+supabase/
+scripts/admin-user.mjs

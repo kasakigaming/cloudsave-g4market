@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CloudSave G4Market</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>CloudSave G4Market</h1>
+        <span class="device">máy: <strong id="device-name">…</strong></span>
+      </div>
+
+      <div id="now-playing" class="playing playing--idle" title="Game đang chạy">
+        <span class="dot"></span>
+        <span id="now-playing-text">Không có game nào đang chạy</span>
+      </div>
+
+      <div class="cloud">
+        <span id="cloud-status" class="muted">Cloud: chưa đăng nhập</span>
+        <button id="btn-cloud-login" data-guard>Đăng nhập cloud</button>
+        <button id="btn-cloud-logout" data-guard hidden>Đăng xuất</button>
+      </div>
+    </header>
+
+    <section class="toolbar">
+      <div class="toolbar__left">
+        <label class="label" for="user-select">Tài khoản Steam</label>
+        <select id="user-select" disabled></select>
+        <span id="steam-meta" class="muted"></span>
+      </div>
+      <div class="toolbar__right">
+        <span id="scan-progress" class="muted"></span>
+        <button id="btn-scan-all" data-guard class="primary">Quét tất cả save</button>
+        <button id="btn-refresh-manifest" data-guard title="Tải lại ludusavi-manifest">
+          Cập nhật manifest
+        </button>
+      </div>
+    </section>
+
+    <main class="layout">
+      <aside class="pane pane--games">
+        <input id="game-filter" type="search" placeholder="Lọc game…" />
+        <ul id="game-list" class="game-list">
+          <li class="empty">Đang dò Steam…</li>
+        </ul>
+      </aside>
+
+      <section class="pane pane--detail">
+        <div id="detail">
+          <p class="empty">Chọn một game ở cột bên trái.</p>
+        </div>
+      </section>
+
+      <aside class="pane pane--log">
+        <h3>Hoạt động</h3>
+        <ol id="log" class="log"></ol>
+      </aside>
+    </main>
+
+    <footer id="status" class="status status--info">Đang khởi động…</footer>
+
+    <dialog id="login-dialog">
+      <form method="dialog" id="login-form">
+        <h3>Đăng nhập cloud</h3>
+        <p class="muted">
+          Chỉ cần khi đẩy bản lưu lên Supabase. Quét, lưu và khôi phục trên máy không cần đăng
+          nhập.
+        </p>
+        <input id="login-email" type="email" placeholder="email" autocomplete="username" required />
+        <input
+          id="login-password"
+          type="password"
+          placeholder="mật khẩu"
+          autocomplete="current-password"
+          required
+        />
+        <p id="login-msg" class="login-msg"></p>
+        <div class="dialog-actions">
+          <button type="button" id="btn-login-cancel">Huỷ</button>
+          <button type="button" id="btn-signup">Đăng ký</button>
+          <button type="submit" id="btn-login-submit" class="primary">Đăng nhập</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

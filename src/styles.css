@@ -1,0 +1,525 @@
+:root {
+  --bg: #12141a;
+  --panel: #1a1d26;
+  --panel-2: #21252f;
+  --line: #2c313d;
+  --text: #e6e8ee;
+  --muted: #8b93a7;
+  --accent: #5b8cff;
+  --ok: #3fbf7f;
+  --warn: #e0a33e;
+  --err: #e5615f;
+  --live: #3fbf7f;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    14px/1.5 "Segoe UI",
+    system-ui,
+    sans-serif;
+}
+
+code {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.muted,
+.label {
+  color: var(--muted);
+}
+
+.label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.empty {
+  color: var(--muted);
+  padding: 8px 2px;
+  margin: 0;
+}
+
+.warn-text {
+  color: var(--warn);
+  font-size: 12px;
+}
+
+/* ── Thanh trên ───────────────────────────────────────────────────────── */
+
+.topbar,
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.brand h1 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.device {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cloud,
+.toolbar__left,
+.toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#scan-progress {
+  font-size: 12px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chỉ báo game đang chạy */
+.playing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  max-width: 420px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.playing .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.playing--live {
+  border-color: color-mix(in srgb, var(--live) 50%, transparent);
+  color: var(--live);
+}
+
+.playing--live .dot {
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.playing--idle {
+  color: var(--muted);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ── Điều khiển ───────────────────────────────────────────────────────── */
+
+input,
+select,
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.danger:hover:not(:disabled) {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+/* ── Bố cục ───────────────────────────────────────────────────────────── */
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 290px 1fr 300px;
+  min-height: 0;
+}
+
+.pane {
+  padding: 12px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.pane--games {
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pane--log {
+  border-left: 1px solid var(--line);
+}
+
+.pane--log h3 {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* ── Danh sách game ───────────────────────────────────────────────────── */
+
+.game-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+
+.game {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.game:hover {
+  background: var(--panel-2);
+}
+
+.game.is-active {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.game__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game__meta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.game__when {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.tag--live {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 45%, transparent);
+}
+
+.tag--local {
+  color: var(--text);
+}
+
+.tag--cloud {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.tag--head {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+/* ── Chi tiết ─────────────────────────────────────────────────────────── */
+
+.detail__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.detail__head h2 {
+  margin: 0 0 2px;
+  font-size: 18px;
+}
+
+.sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.live {
+  color: var(--live);
+}
+
+h3.section {
+  font-size: 13px;
+  margin: 18px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.snap {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 6px;
+  background: var(--panel-2);
+  border-radius: var(--radius);
+}
+
+.snap__main strong {
+  margin-right: 6px;
+}
+
+.snap__meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.snap__actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.snap__actions button {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+details.disk {
+  margin-top: 18px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+details.disk summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.files {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.files th,
+.files td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.files th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.files .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.files .path {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.src--ufs {
+  color: var(--ok);
+}
+
+.src--remote_cache {
+  color: var(--accent);
+}
+
+.src--manifest {
+  color: var(--warn);
+}
+
+/* ── Nhật ký ──────────────────────────────────────────────────────────── */
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.log__item {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.log__item time {
+  color: var(--muted);
+}
+
+.log__item--ok span {
+  color: var(--ok);
+}
+
+.log__item--warn span {
+  color: var(--warn);
+}
+
+.log__item--error span {
+  color: var(--err);
+}
+
+/* ── Thanh trạng thái ─────────────────────────────────────────────────── */
+
+.status {
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status--ok {
+  color: var(--ok);
+}
+
+.status--error {
+  color: var(--err);
+}
+
+/* ── Hộp đăng nhập ────────────────────────────────────────────────────── */
+
+dialog {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  width: 380px;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+
+dialog h3 {
+  margin: 0 0 6px;
+}
+
+dialog p.muted {
+  margin: 0 0 14px;
+  font-size: 12px;
+}
+
+dialog input {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.login-msg {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--warn);
+  margin: 4px 0 10px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

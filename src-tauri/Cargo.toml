@@ -26,6 +26,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 sha2   = "0.10"
 zstd   = "0.13"
+# Nén cực hạn cho cloud: mỗi file thử cả bốn, giữ cái nhỏ nhất (xem pack.rs).
+# Đo trên save thật, không có thuật toán nào thắng mọi file.
+xz2    = { version = "0.1", features = ["static"] }
+brotli = "7"
+bzip2  = "0.4"
 base64 = "0.22"
 hex    = "0.4"
 
@@ -52,3 +57,9 @@ codegen-units = 1
 lto           = true
 opt-level     = "s"
 strip         = true
+
+# Thư viện nén (nhất là brotli, viết bằng Rust thuần) chạy chậm hàng chục lần
+# khi không tối ưu hoá. Tối ưu riêng thư viện phụ thuộc ngay cả ở bản debug:
+# code của app vẫn debug được, còn test và `tauri dev` nén ở tốc độ thật.
+[profile.dev.package."*"]
+opt-level = 3

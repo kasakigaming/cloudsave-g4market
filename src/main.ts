@@ -490,8 +490,14 @@ async function doPush(id: string, force: boolean) {
   setBusy(true);
   try {
     const r = await api.pushLocal(id, force);
-    const dedupe = r.deduped_bytes ? `, bỏ qua ${formatBytes(r.deduped_bytes)} đã có sẵn` : "";
-    const msg = `Đã đẩy lên cloud: ${r.file_count} file, tải lên ${formatBytes(r.uploaded_bytes)}${dedupe}.`;
+    const parts = [`${r.file_count} file`];
+    if (r.uploaded_bytes > 0) {
+      const ratio = ((100 * r.stored_bytes) / r.uploaded_bytes).toFixed(1);
+      parts.push(`${formatBytes(r.uploaded_bytes)} nén còn ${formatBytes(r.stored_bytes)} (${ratio}%)`);
+    }
+    if (r.delta_files) parts.push(`${r.delta_files} file chỉ lưu phần thay đổi`);
+    if (r.deduped_bytes) parts.push(`bỏ qua ${formatBytes(r.deduped_bytes)} đã có sẵn`);
+    const msg = `Đã đẩy lên cloud: ${parts.join(", ")}.`;
     setStatus(msg, "ok");
     log(`☁ ${msg}`, "ok");
     await refreshGames();
@@ -519,7 +525,9 @@ async function doPush(id: string, force: boolean) {
 }
 
 function onPushProgress(p: PushProgress) {
-  if (p.kind === "uploading") setStatus(`Tải lên ${p.file} — ${p.chunk}/${p.chunks}`);
+  if (p.kind === "packing") setStatus(`Đang nén ${p.file}…`);
+  else if (p.kind === "uploading")
+    setStatus(`Tải lên ${p.file} — ${formatBytes(p.stored_bytes)}${p.delta ? " (chỉ phần thay đổi)" : ""}`);
   else if (p.kind === "finalizing") setStatus("Đang ghi metadata…");
 }
 

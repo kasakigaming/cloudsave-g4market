@@ -338,6 +338,234 @@ fn verify(before: &BTreeMap<PathBuf, (u64, String)>) -> u64 {
     total
 }
 
+/// Chuỗi delta trên dữ liệu thật, và dọn rác không được làm gãy chuỗi.
+///
+/// Dùng cặp phiên bản có thật: Stardew giữ save của hôm qua trong `*_old`.
+/// Bản thứ ba được tạo bằng cách sửa vài byte của bản hôm nay. File được đặt
+/// trong một thư mục tạm đóng vai "thư mục cài game" nên không đụng save thật.
+#[tokio::test]
+#[ignore = "cần Supabase thật (đã chạy migration 0004)"]
+async fn delta_chain_survives_gc() {
+    use cloudsave_lib::scan::{SaveFile, Source};
+    use cloudsave_lib::steam::RootToken;
+
+    let Some(h) = setup().await else { return };
+    const SLUG: &str = "e2e-delta-chain";
+
+    // Tìm một nông trại Stardew có sẵn cặp phiên bản thật: game giữ save của
+    // hôm trước trong `<tên>_old` và `SaveGameInfo_old`.
+    let saves_root = PathBuf::from(std::env::var("APPDATA").unwrap())
+        .join("StardewValley")
+        .join("Saves");
+    let farm = std::fs::read_dir(&saves_root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|name| {
+            let d = saves_root.join(name);
+            [
+                name.clone(),
+                format!("{name}_old"),
+                "SaveGameInfo".into(),
+                "SaveGameInfo_old".into(),
+            ]
+            .iter()
+            .all(|f| d.join(f).is_file())
+        });
+    let Some(farm) = farm else {
+        eprintln!("bỏ qua: không có nông trại Stardew nào đủ cặp phiên bản _old");
+        return;
+    };
+    let saves = saves_root.join(&farm);
+    let read = |name: &str| std::fs::read(saves.join(name)).expect("đọc save Stardew thật");
+    let v1 = (read(&format!("{farm}_old")), read("SaveGameInfo_old"));
+    let v2 = (read(&farm), read("SaveGameInfo"));
+    // Bản thứ ba: sửa vài chục byte giữa file, như một ngày chơi ngắn.
+    let mut v3 = v2.clone();
+    let mid = v3.0.len() / 2;
+    for (i, b) in b"<money>987654</money>".iter().enumerate() {
+        v3.0[mid + i] = *b;
+    }
+
+    let game = TmpDir(std::env::temp_dir().join(format!("cs-delta-{}", std::process::id())));
+    let ctx = RootContext {
+        steam_root: h.ctx.steam_root.clone(),
+        account_id: h.account_id,
+        app_id: TEST_APP_ID,
+        game_install: Some(game.0.clone()),
+    };
+    let write_version = |v: &(Vec<u8>, Vec<u8>)| -> GameScan {
+        let mut files = Vec::new();
+        for (rel, data) in [("save/main", &v.0), ("save/info", &v.1)] {
+            let abs = game.0.join(rel.replace('/', "\\"));
+            std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+            std::fs::write(&abs, data).unwrap();
+            files.push(SaveFile {
+                root: RootToken::GameInstall,
+                rel_path: rel.into(),
+                abs_path: abs,
+                size: data.len() as u64,
+                mtime: None,
+                source: Source::Ufs,
+            });
+        }
+        GameScan {
+            app_id: Some(TEST_APP_ID),
+            slug: SLUG.into(),
+            title: "E2E delta chain".into(),
+            total_bytes: files.iter().map(|f| f.size).sum(),
+            files,
+            sources: vec![Source::Ufs],
+            warnings: vec![],
+        }
+    };
+
+    let stale = purge(&h.sb, SLUG).await;
+    if stale > 0 {
+        println!("[0] dọn {stale} snapshot cloud sót từ lần chạy trước");
+    }
+
+    let mut pushed = Vec::new();
+    for (i, v) in [&v1, &v2, &v3].into_iter().enumerate() {
+        let scan = write_version(v);
+        let CaptureOutcome::Created { snapshot } = h
+            .store
+            .capture(&scan, h.account_id, Trigger::Manual)
+            .expect("chụp local")
+        else {
+            panic!("phiên bản {} phải khác bản trước", i + 1)
+        };
+        let r = backup::push(&h.sb, &h.store, &snapshot, &h.device, true, |_| {})
+            .await
+            .expect("đẩy");
+        println!(
+            "[{}] v{}: gốc {:>9} B → lưu {:>7} B trên cloud ({} file delta)",
+            i + 1,
+            i + 1,
+            r.uploaded_bytes,
+            r.stored_bytes,
+            r.delta_files
+        );
+        if i == 0 {
+            // Chưa có phiên bản trước, nhưng file nhỏ (info) vẫn delta được so
+            // với file anh em lớn (main) trong cùng snapshot.
+            assert_eq!(r.delta_files, 1, "bản đầu: info phải delta so với main");
+        } else {
+            // v2: cả main lẫn info đổi → 2 delta. v3: chỉ main đổi, info trùng
+            // v2 nên được dedupe, không gửi → 1 delta.
+            let changed = if i == 1 { 2 } else { 1 };
+            assert_eq!(
+                r.delta_files,
+                changed,
+                "v{}: mọi file phải gửi đều phải là delta",
+                i + 1
+            );
+            assert!(
+                r.stored_bytes * 10
+                    < pushed
+                        .first()
+                        .map(|p: &backup::BackupReport| p.stored_bytes)
+                        .unwrap(),
+                "delta phải nhỏ hơn nhiều so với bản đầy đủ"
+            );
+        }
+        pushed.push(r);
+    }
+
+    // ── Xoá hai snapshot đầu. v3 là delta của v2, v2 là delta của v1, nên
+    //    mọi blob là TỔ TIÊN của v3 phải sống sót qua gc dù không snapshot nào
+    //    còn trỏ thẳng tới chúng. Blob không phải tổ tiên (vd info v1 khi info
+    //    v2 chọn main v2 làm gốc) thì được dọn — đúng.
+    let all_hashes: Vec<String> = [&v1.0, &v1.1, &v2.0, &v2.1, &v3.0, &v3.1]
+        .iter()
+        .map(|b| blob::sha256_hex(b))
+        .collect();
+    let names = [
+        "main v1", "info v1", "main v2", "info v2", "main v3", "info v3",
+    ];
+    let before = h.sb.blob_meta(&all_hashes).await.expect("meta trước gc");
+
+    // Chuỗi của v3: đi ngược từ các file của v3 qua base_hash tới tận đáy.
+    let mut needed = std::collections::BTreeSet::new();
+    let mut todo = vec![all_hashes[4].clone(), all_hashes[5].clone()];
+    while let Some(x) = todo.pop() {
+        if needed.insert(x.clone()) {
+            if let Some(b) = before.get(&x).and_then(|m| m.base_hash.clone()) {
+                todo.push(b);
+            }
+        }
+    }
+    let name_of = |x: &String| names[all_hashes.iter().position(|y| y == x).unwrap()];
+    println!(
+        "[4] chuỗi của v3: {}",
+        needed.iter().map(name_of).collect::<Vec<_>>().join(", ")
+    );
+
+    for r in &pushed[..2] {
+        h.sb.delete_snapshot(&r.snapshot_id)
+            .await
+            .expect("xoá snapshot");
+    }
+    let freed = h.sb.gc().await.expect("gc");
+    let after = h.sb.blob_meta(&all_hashes).await.expect("meta sau gc");
+    println!("    xoá snapshot v1, v2 → gc giải phóng {freed} chunk");
+    for k in before.keys().filter(|k| !after.contains_key(*k)) {
+        println!("    đã dọn: {} (không phải tổ tiên của v3)", name_of(k));
+        assert!(
+            !needed.contains(k),
+            "gc dọn nhầm {} — tổ tiên của v3",
+            name_of(k)
+        );
+    }
+    for n in &needed {
+        assert!(
+            after.contains_key(n),
+            "gc đã xoá {} — một mắt trong chuỗi của v3",
+            name_of(n)
+        );
+    }
+
+    // ── Xoá đĩa, khôi phục v3 từ cloud: phải đi ngược 2 mắt delta về v1.
+    std::fs::remove_dir_all(&game.0).unwrap();
+    let rr = restore::run_remote(
+        &h.sb,
+        &pushed[2].snapshot_id,
+        &ctx,
+        &restore::default_safety_root(),
+        |_| {},
+    )
+    .await
+    .expect("khôi phục v3");
+    assert_eq!(rr.restored, 2);
+    assert_eq!(
+        std::fs::read(game.0.join("save\\main")).unwrap(),
+        v3.0,
+        "main không byte-exact"
+    );
+    assert_eq!(
+        std::fs::read(game.0.join("save\\info")).unwrap(),
+        v3.1,
+        "info không byte-exact"
+    );
+    println!("[5] xoá đĩa → khôi phục v3 qua chuỗi delta: byte-exact");
+
+    // ── Dọn: xoá v3 → cả chuỗi mới được giải phóng.
+    h.sb.delete_snapshot(&pushed[2].snapshot_id)
+        .await
+        .expect("xoá v3");
+    let freed = h.sb.gc().await.expect("gc");
+    println!("[6] xoá v3 → gc giải phóng {freed} chunk (cả chuỗi)");
+    assert!(freed > 0);
+
+    let total_stored: u64 = pushed.iter().map(|r| r.stored_bytes).sum();
+    let total_raw: u64 = pushed.iter().map(|r| r.uploaded_bytes).sum();
+    println!(
+        "\n3 phiên bản: gốc {total_raw} B → lưu {total_stored} B ({:.2}%)",
+        100.0 * total_stored as f64 / total_raw as f64
+    );
+}
+
 /// Kiểm tra riêng phần checksum bảo vệ: dữ liệu hỏng phải bị chặn TRƯỚC khi
 /// chạm tới đĩa, chứ không phải sau.
 #[tokio::test]

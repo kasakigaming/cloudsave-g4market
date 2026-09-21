@@ -19,6 +19,9 @@ const ZSTD_LEVEL: i32 = 3;
 pub enum Codec {
     Raw,
     Zstd,
+    /// Lát cắt của một luồng nén cả file (định dạng mới, xem `pack.rs`). Một
+    /// lát riêng lẻ không giải được — phải ghép đủ rồi giải cả luồng.
+    Part,
 }
 
 impl Codec {
@@ -26,6 +29,7 @@ impl Codec {
         match self {
             Codec::Raw => "raw",
             Codec::Zstd => "zstd",
+            Codec::Part => "part",
         }
     }
 
@@ -33,6 +37,7 @@ impl Codec {
         match s {
             "raw" => Ok(Codec::Raw),
             "zstd" => Ok(Codec::Zstd),
+            "part" => Ok(Codec::Part),
             other => Err(Error::Parse(format!("codec không nhận ra: {other}"))),
         }
     }
@@ -129,6 +134,13 @@ pub fn assemble(mut chunks: Vec<Chunk>, expected_hash: &str) -> Result<Vec<u8>> 
     for c in &chunks {
         match c.codec {
             Codec::Raw => out.extend_from_slice(&c.data),
+            // Lát cắt định dạng mới lọt vào đường giải kiểu cũ là dữ liệu bị
+            // nhầm định dạng; báo lỗi rõ ràng thay vì để sha256 báo sai sau đó.
+            Codec::Part => {
+                return Err(Error::Parse(format!(
+                    "blob {expected_hash} là định dạng mới, không giải từng chunk được"
+                )))
+            }
             Codec::Zstd => {
                 let d = zstd::decode_all(c.data.as_slice())
                     .map_err(|e| Error::Parse(format!("giải nén chunk {}: {e}", c.idx)))?;

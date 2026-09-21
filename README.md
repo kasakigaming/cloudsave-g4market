@@ -24,7 +24,7 @@ danh sách là thứ lên cloud.
 
 ## Ý tưởng
 
-Ba quyết định thiết kế, và lý do đằng sau mỗi cái.
+Bốn quyết định thiết kế, và lý do đằng sau mỗi cái.
 
 ### 1. Đường dẫn save lấy từ Steam, không phải đoán
 
@@ -67,16 +67,42 @@ nghĩa là khôi phục save vào nhầm thư mục.
 
 ### 3. Bytes là nguồn chân lý; `preview` chỉ để nhìn
 
-Nội dung file đi vào Postgres dưới dạng `bytea`, nén zstd, cắt chunk 512 KiB,
-content-addressed theo SHA-256 của nội dung gốc.
-
 App **không** parse save thành dữ liệu có nghĩa rồi dựng lại file từ đó. Save
 game thường có checksum nội bộ, mã hoá theo máy, hoặc bố cục phụ thuộc phiên
-bản engine; round-trip không byte-exact là save hỏng.
+bản engine; round-trip không byte-exact là save hỏng. Mọi blob đều được kiểm
+SHA-256 trước khi ghi ra đĩa.
 
-Đổi lại, cột `snapshots.preview` chứa những gì đọc được từ các format dễ (JSON,
-INI, XML) để UI hiển thị. Nó **không bao giờ** tham gia vào việc khôi phục —
-xem [`preview.rs`](src-tauri/src/preview.rs).
+Cột `snapshots.preview` chứa những gì đọc được từ các format dễ (JSON, INI,
+XML) để UI hiển thị. Nó **không bao giờ** tham gia vào việc khôi phục — xem
+[`preview.rs`](src-tauri/src/preview.rs).
+
+### 4. Nén cực hạn khi lên cloud
+
+Đo trên save thật, **không có thuật toán nào thắng mọi file**, nên mỗi file
+được thử song song rồi giữ cách nhỏ nhất ([`pack.rs`](src-tauri/src/pack.rs)):
+
+- Độc lập: `xz -9e`, `brotli-11`, `bzip2 -9`, `zstd-22`, hoặc lưu thô cho file
+  không nén được (save đã mã hoá).
+- **Delta** zstd-22 (kiểu `--patch-from`) so với phiên bản trước của chính file
+  đó, **và** so với file anh em lớn nhất trong cùng snapshot.
+
+Kết quả được giải ngược và so từng byte trước khi chấp nhận. Chuỗi delta tối
+đa 8 mắt; dọn rác trên server hiểu quan hệ delta nên không bao giờ xoá một bản
+còn là tổ tiên của bản đang dùng.
+
+Đo trên save thật của máy phát triển:
+
+| | Cách cũ (zstd-3) | Cực hạn |
+|---|---|---|
+| Stardew Valley, lần đẩy đầu (7 file, 11 MB) | 361,8 KB | **103,3 KB** |
+| Stardew, mỗi lần đẩy sau (delta so với hôm trước) | ~133 KB | **~3,4 KB** |
+| 3 phiên bản Stardew liên tiếp (11,2 MB) | — | **69,8 KB** (0,62%) |
+| DAVE THE DIVER (2,3 MB) | 848,8 KB | **338,7 KB** |
+| Stellar Blade (1,5 MB) | 51,0 KB | **33,7 KB** |
+
+**Giới hạn thật:** save đã mã hoá (ELDEN RING NIGHTREIGN, phần lớn ELDEN RING)
+không nén được bằng bất kỳ thuật toán nào — dữ liệu mã hoá không phân biệt được
+với dữ liệu ngẫu nhiên. Với loại này chỉ còn dedupe và delta giữa các phiên bản.
 
 ## Chạy thử
 
@@ -126,7 +152,7 @@ npm run tauri dev
 
 ```powershell
 cd src-tauri
-cargo test                                                    # 43 unit test + watcher_real
+cargo test                                                    # 53 unit test + watcher_real
 cargo test --test scan_real_steam -- --ignored --nocapture    # chạy trên Steam thật
 cargo clippy --all-targets
 ```
@@ -154,33 +180,32 @@ round-trip     : byte-exact trên 680 file thật (~1,08 GB)
 thư mục game giả, chạy nó, và đòi watcher nhận ra — rồi tắt và đòi watcher thấy
 nó biến mất. Chạy trong `cargo test` thường, không cần Steam.
 
-### Test end-to-end thật
+### Test end-to-end thật (phá huỷ)
 
-[`supabase_e2e.rs`](src-tauri/tests/supabase_e2e.rs) chạy cả vòng Steam →
-Supabase → đĩa. **Nó xoá file save thật rồi khôi phục**, nên hãy sao lưu trước
-khi chạy lần đầu.
+Hai file test này **xoá save thật rồi khôi phục từ cloud**:
 
 ```powershell
 $env:CS_TEST_EMAIL="..."; $env:CS_TEST_PASSWORD="..."
-cargo test --test supabase_e2e -- --ignored --nocapture --test-threads=1
+cargo test --release --test supabase_e2e   -- --ignored --nocapture --test-threads=1
+cargo test --release --test real_saves_e2e -- --ignored --nocapture --test-threads=1
 ```
 
-Kết quả thật trên save Stardew Valley 11 MB:
+[`real_saves_e2e.rs`](src-tauri/tests/real_saves_e2e.rs) lấy **mọi** save trên
+mọi tài khoản Steam, đẩy lên cloud, xoá khỏi đĩa, rồi lấy về và so từng byte. Nó
+chép mọi file sang chỗ riêng trước khi bắt đầu, và khi kết thúc — kể cả panic —
+tự chép lại file nào thiếu hay lệch. Kết quả trên máy phát triển:
 
 ```
-[1]  quét            : 7 file, 11.029.616 byte
-[2]  chụp local      : 7 file — chưa lên cloud
-[3]  chụp lại        : không đổi → không ghi thêm
-[5]  đẩy lên cloud   : tải lên 11.029.616 byte
-[6]  đẩy lại         : tải lên 0 byte
-[7]  xung đột        : máy khác bị chặn đúng
-[8]  XOÁ → khôi phục từ LOCAL : byte-exact 11.029.616 byte (không dùng mạng)
-[9]  XOÁ → khôi phục từ CLOUD : byte-exact 11.029.616 byte
-[10] dọn cloud       : gc giải phóng 26 chunk
+[1] 14 bộ save, 38 file, 65.856.241 byte
+[3] đẩy lên cloud: 65,9 MB gốc → 22,2 MB lưu (21,5 MB trong đó là 2 save mã hoá)
+[4] đã XOÁ 38 file save thật khỏi đĩa
+[5] lấy về từ cloud: 38/38 file khớp từng byte với bản gốc
+[lưới an toàn] 38 file được bảo vệ, 0 file phải chép lại từ bản sao
 ```
 
-Test tự dọn snapshot cũ ở bước `[1b]` nên chạy lại được nhiều lần; nhờ vậy
-bước `[5]` luôn là một lần upload thật chứ không ăn sẵn blob của lần trước.
+`delta_chain_survives_gc` đẩy 3 phiên bản thật của Stardew thành chuỗi delta,
+xoá snapshot của 2 bản đầu, dọn rác, rồi khôi phục bản thứ ba — khẳng định dọn
+rác không làm gãy chuỗi.
 
 ## Cấu trúc
 
@@ -196,7 +221,9 @@ src-tauri/src/
 ├─ scan.rs            gộp ba nguồn thành danh sách file, dedupe
 ├─ local_store.rs     kho trên máy: blob nén theo sha256 + snapshot JSON
 ├─ watcher.rs         game đang chạy (registry + tiến trình), chụp khi tắt
-├─ blob.rs            sha256 + zstd + chunk, round-trip byte-exact
+├─ pack.rs            nén cực hạn: xz/brotli/bzip2/zstd/delta, giữ cái nhỏ nhất
+├─ remote_blob.rs     upload lát cắt, tải về + giải ngược chuỗi delta
+├─ blob.rs            sha256 + chunk, định dạng cũ
 ├─ preview.rs         trích data để hiển thị (không dùng khi khôi phục)
 ├─ supabase.rs        GoTrue + PostgREST + RPC bytea
 ├─ backup.rs          đẩy một bản LOCAL: dedupe → upload → metadata → complete
@@ -206,7 +233,8 @@ src-tauri/src/
 src-tauri/tests/
 ├─ scan_real_steam.rs integration test chạy trên Steam thật (#[ignore])
 ├─ watcher_real.rs    phát hiện tiến trình game thật
-└─ supabase_e2e.rs    local → cloud → xoá đĩa → khôi phục (#[ignore], phá huỷ)
+├─ supabase_e2e.rs    local → cloud → xoá đĩa → khôi phục, chuỗi delta + gc
+└─ real_saves_e2e.rs  MỌI save thật → cloud → xoá → lấy về (#[ignore], phá huỷ)
 ```
 
 ## Những chỗ cần biết trước khi dùng thật

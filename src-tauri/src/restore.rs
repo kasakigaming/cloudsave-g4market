@@ -15,9 +15,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::blob::{self, Chunk};
+use crate::blob;
 use crate::error::{Error, Result};
 use crate::local_store::{LocalSnapshot, LocalStore};
+use crate::remote_blob;
 use crate::steam::{remotecache, RootContext, RootToken};
 use crate::supabase::Supabase;
 
@@ -128,6 +129,8 @@ where
     }
 
     let mut ap = Applier::new(ctx, safety_root, snapshot_id);
+    // Nhiều file chung tổ tiên delta thì mỗi tổ tiên chỉ tải một lần.
+    let mut cache = remote_blob::Cache::default();
     on_progress(Progress::Started {
         total_files: entries.len(),
     });
@@ -140,12 +143,8 @@ where
         let Some(target) = ap.target(e, &mut on_progress) else {
             continue;
         };
-        let mut chunks: Vec<Chunk> = Vec::with_capacity(e.chunk_count as usize);
-        for idx in 0..e.chunk_count {
-            chunks.push(sb.get_chunk(&e.hash, idx).await?);
-        }
-        // `assemble` kiểm sha256 và báo lỗi nếu thiếu chunk.
-        let bytes = blob::assemble(chunks, &e.hash)?;
+        // Xử lý cả hai định dạng và cả chuỗi delta; mọi mắt đều kiểm sha256.
+        let bytes = remote_blob::fetch(sb, &e.hash, Some(e.chunk_count), &mut cache).await?;
         ap.apply(e, &target, &bytes)?;
     }
     Ok(ap.finish(&mut on_progress))

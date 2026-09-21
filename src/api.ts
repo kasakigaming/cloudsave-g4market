@@ -131,14 +131,24 @@ export interface BackupReport {
   file_count: number;
   total_bytes: number;
   uploaded_bytes: number;
+  /// Số byte thật sự lưu trên cloud sau khi nén / delta.
+  stored_bytes: number;
   deduped_bytes: number;
+  delta_files: number;
 }
 
 export type PushProgress =
   | { kind: "started"; total_files: number; total_bytes: number }
-  | { kind: "uploading"; file: string; chunk: number; chunks: number }
+  | { kind: "packing"; file: string }
+  | { kind: "uploading"; file: string; stored_bytes: number; delta: boolean }
   | { kind: "finalizing" }
-  | { kind: "done"; snapshot_id: string; uploaded_bytes: number; deduped_bytes: number };
+  | {
+      kind: "done";
+      snapshot_id: string;
+      uploaded_bytes: number;
+      stored_bytes: number;
+      deduped_bytes: number;
+    };
 
 export interface RestoreReport {
   restored: number;

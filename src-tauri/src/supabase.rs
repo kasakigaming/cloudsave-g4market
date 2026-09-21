@@ -3,6 +3,7 @@
 //! Cố tình viết tay thay vì kéo một SDK: ta chỉ cần vài endpoint, và phần
 //! bytea-qua-base64 dù sao cũng phải đi qua RPC tự định nghĩa.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -14,6 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::blob::{Chunk, Codec};
 use crate::error::{Error, Result};
+use crate::pack::{Encoding, Packed};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -110,6 +112,17 @@ pub struct Session {
     pub refresh_token: String,
     pub user_id: String,
     pub email: Option<String>,
+}
+
+/// Metadata một blob định dạng mới trên server.
+#[derive(Debug, Clone)]
+pub struct BlobMeta {
+    pub hash: String,
+    pub encoding: Encoding,
+    pub base_hash: Option<String>,
+    pub depth: u32,
+    pub chunk_count: u32,
+    pub stored_size: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -396,6 +409,70 @@ impl Supabase {
             .map_err(|e| Error::Parse(format!("base64 hỏng ở chunk {idx}: {e}")))?;
 
         Ok(Chunk { idx, codec, data })
+    }
+
+    // ── Blob định dạng mới (xem pack.rs) ─────────────────────────────────
+
+    /// Metadata của các blob định dạng mới đã hoàn chỉnh trên server.
+    /// Blob kiểu cũ không có mặt ở đây — xem `have_blobs`.
+    pub async fn blob_meta(&self, hashes: &[String]) -> Result<HashMap<String, BlobMeta>> {
+        if hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let v = self
+            .rpc("cs_blob_meta", json!({ "p_hashes": hashes }))
+            .await?;
+        let mut out = HashMap::new();
+        for row in v.as_array().into_iter().flatten() {
+            let (Some(hash), Some(enc), Some(depth), Some(chunks), Some(size)) = (
+                row.get("hash").and_then(Value::as_str),
+                row.get("encoding").and_then(Value::as_str),
+                row.get("depth").and_then(Value::as_u64),
+                row.get("chunk_count").and_then(Value::as_u64),
+                row.get("stored_size").and_then(Value::as_u64),
+            ) else {
+                continue;
+            };
+            out.insert(
+                hash.to_string(),
+                BlobMeta {
+                    hash: hash.to_string(),
+                    encoding: Encoding::parse(enc)?,
+                    base_hash: row
+                        .get("base_hash")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    depth: depth as u32,
+                    chunk_count: chunks as u32,
+                    stored_size: size,
+                },
+            );
+        }
+        Ok(out)
+    }
+
+    /// Xoá lát cắt mồ côi của một lần upload bị đứt trước đó.
+    pub async fn reset_blob(&self, hash: &str) -> Result<()> {
+        self.rpc("cs_reset_blob", json!({ "p_hash": hash })).await?;
+        Ok(())
+    }
+
+    /// Ghi metadata SAU khi đã đủ lát cắt. Server tự đếm lại lát, kiểm bản gốc
+    /// tồn tại và độ sâu nối đúng — sai là từ chối.
+    pub async fn put_blob(&self, hash: &str, packed: &Packed, chunk_count: u32) -> Result<()> {
+        self.rpc(
+            "cs_put_blob",
+            json!({
+                "p_hash":        hash,
+                "p_encoding":    packed.encoding.as_str(),
+                "p_base_hash":   packed.base_hash,
+                "p_depth":       packed.depth,
+                "p_chunk_count": chunk_count,
+                "p_stored_size": packed.bytes.len(),
+            }),
+        )
+        .await?;
+        Ok(())
     }
 
     // ── Snapshot ─────────────────────────────────────────────────────────

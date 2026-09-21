@@ -10,3 +10,7 @@ src-tauri/gen/
 # Backend Supabase của project này: giữ riêng, không đưa lên repo công khai.
 supabase/
 scripts/admin-user.mjs
+
+# Dữ liệu tham khảo crawl từ freefrontend.com — nội dung của bên thứ ba,
+# giữ ở máy, không đưa lên repo công khai.
+design-research/

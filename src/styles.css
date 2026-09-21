@@ -1,16 +1,43 @@
+/*
+ * Giao diện glassmorphism.
+ *
+ * Bố cục học theo kiểu "một thanh điều hướng viên thuốc nổi trên nền ảnh":
+ * ít khung, nhiều khoảng thở, để nền lộ ra. Kính trong và mảnh — viền sáng
+ * 1px, vệt sáng ở mép trên, bóng mềm, lớp hạt nhiễu rất nhẹ.
+ *
+ * Hiệu năng: `backdrop-filter` tốn GPU nên chỉ dùng cho vài tấm lớn (thanh
+ * điều hướng, 2 tấm ở trang Game, trang Hoạt động/Cài đặt, thông báo, hộp
+ * thoại). Phần tử bên trong chỉ dùng nền trong suốt.
+ */
+
 :root {
-  --bg: #12141a;
-  --panel: #1a1d26;
-  --panel-2: #21252f;
-  --line: #2c313d;
-  --text: #e6e8ee;
-  --muted: #8b93a7;
-  --accent: #5b8cff;
-  --ok: #3fbf7f;
-  --warn: #e0a33e;
-  --err: #e5615f;
-  --live: #3fbf7f;
-  --radius: 8px;
+  color-scheme: dark;
+
+  --bg: #0b0d1a;
+
+  /* Kính: trong để thấy nền, vẫn đủ tối để chữ trắng đọc được. */
+  --glass: rgb(16 10 30 / 0.2);
+  --glass-edge: rgb(255 255 255 / 0.16);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.2);
+  --glass-shadow: 0 12px 40px rgb(3 2 12 / 0.35);
+  --glass-blur: blur(16px) saturate(160%);
+
+  --text: #f2f1f8;
+  --muted: #c3c0d4;
+  --faint: #9894ab;
+
+  --accent: #7c8cff;
+  --accent-2: #45c4ff;
+  --ok: #4ae6a8;
+  --warn: #ffc15e;
+  --err: #ff6b81;
+  --live: #4ae6a8;
+
+  --radius: 20px;
+  --radius-sm: 10px;
+  --gap: 16px;
+
+  --noise: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 * {
@@ -26,33 +53,43 @@ body {
 body {
   display: flex;
   flex-direction: column;
+  gap: var(--gap);
+  padding: 18px 20px 20px;
   background: var(--bg);
   color: var(--text);
   font:
-    14px/1.5 "Segoe UI",
+    14px/1.5 "Segoe UI Variable Text",
+    "Segoe UI",
     system-ui,
     sans-serif;
+  overflow: hidden;
+  /* Chữ trên kính trong cần một chút bóng để tách khỏi vùng nền sáng. */
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--noise);
+  opacity: 0.045;
+  pointer-events: none;
 }
 
 code {
   font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 0.92em;
+  font-size: 0.9em;
+  color: #d4d9ff;
 }
 
-.muted,
-.label {
+.muted {
   color: var(--muted);
-}
-
-.label {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .empty {
-  color: var(--muted);
-  padding: 8px 2px;
+  color: var(--faint);
+  padding: 10px 2px;
   margin: 0;
 }
 
@@ -61,91 +98,316 @@ code {
   font-size: 12px;
 }
 
-/* ── Thanh trên ───────────────────────────────────────────────────────── */
+/* ── Nền ────────────────────────────────────────────────────────────── */
+/*
+ * Ảnh phong cảnh từ Unsplash (giấy phép Unsplash), nhúng sẵn trong app nên
+ * không cần mạng. "Hẻm núi" đứng yên; "Xoay vòng" đổi ảnh vài chục giây một
+ * lần, ảnh mới hiện dần lên trên ảnh cũ (main.ts). Ảnh nào dùng ở đâu: README.
+ */
 
-.topbar,
-.toolbar {
-  display: flex;
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  overflow: hidden;
+  background: #0d0b1c;
+}
+
+.backdrop__img {
+  position: absolute;
+  inset: 0;
+  background: center / cover no-repeat;
+  opacity: 0;
+  transition: opacity 2.4s ease;
+  will-change: opacity, transform;
+}
+
+.backdrop__img.is-on {
+  opacity: 1;
+}
+
+/* Xoay vòng: ảnh đang hiện phóng to rất chậm cho có sức sống. */
+body[data-bg="rotate"] .backdrop__img.is-on {
+  animation: bg-drift 60s ease-out forwards;
+}
+
+@keyframes bg-drift {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.07);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop__img {
+    transition: none;
+    animation: none !important;
+  }
+}
+
+/* Lớp phủ tối mỏng giữ chữ đọc được trên vùng ảnh sáng (tuyết, vòm đá). */
+.backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgb(12 8 32 / 0.08) 0%, rgb(8 6 20 / 0.38) 100%);
+}
+
+body {
+  --glass: rgb(20 10 30 / 0.22);
+  --glass-edge: rgb(255 255 255 / 0.18);
+}
+
+/* ── Tấm kính ─────────────────────────────────────────────────────────── */
+
+.glass,
+.pillnav,
+.toast,
+dialog {
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+.glass {
+  border-radius: var(--radius);
+}
+
+/* Máy không có backdrop-filter: kính đục hơn để chữ vẫn đọc được. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .pillnav,
+  .toast,
+  dialog {
+    background: rgb(22 18 36 / 0.9);
+  }
+}
+
+/* ── Khung trên: logo · điều hướng · trạng thái ─────────────────────────── */
+
+.shell {
+  display: grid;
+  /* Hai cột bên được co tới 0, nên cụm bên phải không bao giờ tràn đè lên
+     thanh điều hướng ở giữa khi cửa sổ hẹp. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
-  padding: 10px 16px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
+  padding: 2px 4px 0;
 }
 
 .brand {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.brand h1 {
-  font-size: 16px;
-  margin: 0;
-}
-
-.device {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.cloud,
-.toolbar__left,
-.toolbar__right {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-#scan-progress {
+.brand__mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.4),
+    0 4px 16px color-mix(in srgb, var(--accent) 55%, transparent);
+  position: relative;
+}
+
+/* Mây nhỏ trên logo. */
+.brand__mark::after {
+  content: "";
+  position: absolute;
+  inset: 8px 5px 7px;
+  border-radius: 6px 6px 4px 4px;
+  background: rgb(255 255 255 / 0.9);
+  -webkit-mask: radial-gradient(circle at 35% 30%, #000 42%, transparent 44%),
+    radial-gradient(circle at 65% 40%, #000 38%, transparent 40%),
+    linear-gradient(#000 0 0) bottom / 100% 55% no-repeat;
+  mask: radial-gradient(circle at 35% 30%, #000 42%, transparent 44%),
+    radial-gradient(circle at 65% 40%, #000 38%, transparent 40%),
+    linear-gradient(#000 0 0) bottom / 100% 55% no-repeat;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 12px rgb(0 0 0 / 0.35);
+}
+
+.shell__right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  position: relative;
+}
+
+.cloud-status {
   font-size: 12px;
-  max-width: 320px;
+  color: var(--muted);
+  text-shadow: 0 1px 8px rgb(0 0 0 / 0.5);
+  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Nút ở góc phải không bao giờ co hay xuống dòng. Chip và viên "đang chơi"
+   thì co lại, cắt chữ bằng dấu "…" — thứ tự nhường chỗ: email, rồi tên. */
+.shell__right > button {
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
-/* Chỉ báo game đang chạy */
+.shell__right > .playing,
+.shell__right > .acct {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.shell__right > .cloud-status {
+  flex-shrink: 3;
+}
+
+.shell__right > .scloud {
+  flex-shrink: 0;
+}
+
+/* Lúc không chơi game nào thì viên này không mang thông tin gì — ẩn đi cho
+   gọn; nó hiện lên (có quầng xanh) khi một game đang chạy. */
+/* Hai class để thắng `.playing { display: flex }` khai báo phía dưới. */
+.playing.playing--idle {
+  display: none;
+}
+
+/* Thanh điều hướng dạng viên thuốc, vệt kính sáng trượt theo chuột. */
+.pillnav {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgb(10 6 20 / 0.42);
+}
+
+.pillnav__glow {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 0;
+  width: 0;
+  opacity: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.24), rgb(255 255 255 / 0.1));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.4),
+    inset 0 -1px 0 rgb(255 255 255 / 0.08),
+    0 4px 14px rgb(0 0 0 / 0.3);
+  /* Hơi vượt đích rồi dội lại — kiểu lò xo. */
+  transition:
+    transform 0.45s cubic-bezier(0.34, 1.45, 0.64, 1),
+    width 0.45s cubic-bezier(0.34, 1.45, 0.64, 1),
+    opacity 0.2s;
+  pointer-events: none;
+}
+
+.pillnav__item {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  color: rgb(255 255 255 / 0.72);
+  font-size: 15px;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.pillnav__item:hover:not(:disabled),
+.pillnav__item.is-active {
+  background: transparent;
+  color: #fff;
+  transform: none;
+}
+
+.pillnav__badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--err);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--err) 60%, transparent);
+}
+
+/* Chỉ báo game đang chạy. */
 .playing {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px;
+  padding: 6px 12px;
   border-radius: 999px;
-  border: 1px solid var(--line);
-  font-size: 13px;
-  max-width: 420px;
-  overflow: hidden;
+  font-size: 12px;
+  max-width: 280px;
   white-space: nowrap;
+  background: rgb(10 6 20 / 0.36);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  transition:
+    border-color 0.3s,
+    box-shadow 0.3s,
+    color 0.3s;
+}
+
+.playing #now-playing-text {
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .playing .dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--faint);
   flex: none;
-}
-
-.playing--live {
-  border-color: color-mix(in srgb, var(--live) 50%, transparent);
-  color: var(--live);
-}
-
-.playing--live .dot {
-  background: var(--live);
-  animation: pulse 1.6s ease-in-out infinite;
 }
 
 .playing--idle {
   color: var(--muted);
 }
 
+.playing--live {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 50%, transparent);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--live) 30%, transparent);
+}
+
+.playing--live .dot {
+  background: var(--live);
+  box-shadow: 0 0 10px var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
 @keyframes pulse {
   50% {
-    opacity: 0.3;
+    opacity: 0.35;
+    transform: scale(0.8);
   }
 }
 
@@ -156,17 +418,33 @@ select,
 button {
   font: inherit;
   color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 6px 10px;
+  background: rgb(255 255 255 / 0.08);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.15s,
+    color 0.2s;
+}
+
+input::placeholder {
+  color: var(--faint);
+}
+
+select option {
+  background: #1d1630;
+  color: var(--text);
 }
 
 input:focus,
 select:focus,
 button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 70%, white 10%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 button {
@@ -174,58 +452,172 @@ button {
 }
 
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: rgb(255 255 255 / 0.15);
+  border-color: rgb(255 255 255 / 0.26);
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  border: 1px solid rgb(255 255 255 / 0.28);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
   color: #fff;
   font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.3),
+    0 6px 20px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #8f9cff 0%, #5fd0ff 100%);
+  transform: translateY(-1px);
+}
+
+/* Nút phụ dạng chữ: không viền, chỉ hiện nền khi rê chuột — bớt rối mắt. */
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  padding: 5px 10px;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.1);
+  border-color: rgb(255 255 255 / 0.12);
+  color: var(--text);
+}
+
+button.ghost--accent {
+  color: #a9c9ff;
 }
 
 button.danger:hover:not(:disabled) {
-  border-color: var(--err);
-  color: var(--err);
+  background: color-mix(in srgb, var(--err) 18%, transparent);
+  border-color: color-mix(in srgb, var(--err) 45%, transparent);
+  color: #ffd1d8;
 }
 
-/* ── Bố cục ───────────────────────────────────────────────────────────── */
+/* ── Trang ────────────────────────────────────────────────────────────── */
 
-.layout {
+.views {
   flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.view {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease,
+    visibility 0s linear 0.25s;
+}
+
+.view.is-active {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+
+.view--games {
   display: grid;
-  grid-template-columns: 290px 1fr 300px;
-  min-height: 0;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--gap);
 }
 
-.pane {
-  padding: 12px;
+.view--activity,
+.view--settings {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.page {
+  width: min(720px, 100%);
+  max-height: 100%;
   overflow: auto;
-  min-height: 0;
+  padding: 24px 28px;
 }
 
-.pane--games {
-  border-right: 1px solid var(--line);
+.page h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.page__sub {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.list,
+.detail {
+  min-height: 0;
+  overflow: auto;
+}
+
+.list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 14px;
 }
 
-.pane--log {
-  border-left: 1px solid var(--line);
+.list__head {
+  display: flex;
+  gap: 8px;
 }
 
-.pane--log h3 {
-  margin: 4px 0 10px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.list__head input {
+  flex: 1;
+  min-width: 0;
+}
+
+.scan-progress {
+  font-size: 11px;
   color: var(--muted);
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-progress:empty {
+  display: none;
+}
+
+.detail {
+  padding: 22px 26px;
+}
+
+/* Thanh cuộn mảnh, trong suốt. */
+.list::-webkit-scrollbar,
+.detail::-webkit-scrollbar,
+.page::-webkit-scrollbar {
+  width: 8px;
+}
+
+.list::-webkit-scrollbar-thumb,
+.detail::-webkit-scrollbar-thumb,
+.page::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.16);
+  border-radius: 8px;
+}
+
+.list::-webkit-scrollbar-track,
+.detail::-webkit-scrollbar-track,
+.page::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* ── Danh sách game ───────────────────────────────────────────────────── */
@@ -234,31 +626,48 @@ button.danger:hover:not(:disabled) {
   list-style: none;
   margin: 0;
   padding: 0;
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .game {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background 0.2s;
 }
 
 .game:hover {
-  background: var(--panel-2);
+  background: rgb(255 255 255 / 0.07);
 }
 
 .game.is-active {
-  background: var(--panel-2);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: rgb(255 255 255 / 0.13);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
+}
+
+.game.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--accent), var(--accent-2));
+  box-shadow: 0 0 12px var(--accent);
 }
 
 .game__title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
 
 .game__meta {
@@ -270,22 +679,23 @@ button.danger:hover:not(:disabled) {
 
 .game__when {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--faint);
   margin-left: auto;
 }
 
 .tag {
   font-size: 10px;
-  padding: 1px 6px;
+  font-weight: 500;
+  padding: 1px 8px;
   border-radius: 999px;
-  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.08);
   color: var(--muted);
   white-space: nowrap;
 }
 
 .tag--live {
   color: var(--live);
-  border-color: color-mix(in srgb, var(--live) 45%, transparent);
+  background: color-mix(in srgb, var(--live) 16%, transparent);
 }
 
 .tag--local {
@@ -293,13 +703,18 @@ button.danger:hover:not(:disabled) {
 }
 
 .tag--cloud {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: #a9dcff;
+  background: color-mix(in srgb, var(--accent-2) 18%, transparent);
 }
 
 .tag--head {
   color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  margin-left: 6px;
+}
+
+.tag--muted {
+  color: var(--faint);
 }
 
 /* ── Chi tiết ─────────────────────────────────────────────────────────── */
@@ -314,7 +729,8 @@ button.danger:hover:not(:disabled) {
 
 .detail__head h2 {
   margin: 0 0 2px;
-  font-size: 18px;
+  font-size: 24px;
+  font-weight: 700;
 }
 
 .sub {
@@ -328,25 +744,42 @@ button.danger:hover:not(:disabled) {
 }
 
 h3.section {
-  font-size: 13px;
-  margin: 18px 0 8px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 24px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
 }
 
+/* Mỗi bản lưu là một dòng có vạch ngăn, không phải một hộp riêng. */
 .snap {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px;
-  margin-bottom: 6px;
-  background: var(--panel-2);
-  border-radius: var(--radius);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  margin: 0 -8px;
+  border-radius: var(--radius-sm);
+  border-bottom: 1px solid rgb(255 255 255 / 0.07);
+  transition: background 0.2s;
+}
+
+.snap:last-of-type {
+  border-bottom: 0;
+}
+
+.snap:hover {
+  background: rgb(255 255 255 / 0.06);
 }
 
 .snap__main strong {
   margin-right: 6px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .snap__meta {
@@ -357,21 +790,19 @@ h3.section {
 
 .snap__actions {
   display: flex;
-  gap: 6px;
+  gap: 2px;
   flex: none;
 }
 
 .snap__actions button {
-  padding: 3px 10px;
   font-size: 12px;
 }
 
 details.disk {
-  margin-top: 18px;
-  padding: 8px 10px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  margin-top: 24px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgb(0 0 0 / 0.16);
 }
 
 details.disk summary {
@@ -380,23 +811,30 @@ details.disk summary {
   font-size: 13px;
 }
 
+details.disk summary:hover {
+  color: var(--text);
+}
+
 .files {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .files th,
 .files td {
   text-align: left;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--line);
+  padding: 5px 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.07);
 }
 
 .files th {
-  color: var(--muted);
+  color: var(--faint);
   font-weight: 500;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
 }
 
 .files .num {
@@ -421,32 +859,39 @@ details.disk summary {
 }
 
 .src--remote_cache {
-  color: var(--accent);
+  color: #a9dcff;
 }
 
 .src--manifest {
   color: var(--warn);
 }
 
-/* ── Nhật ký ──────────────────────────────────────────────────────────── */
+/* ── Hoạt động ────────────────────────────────────────────────────────── */
 
 .log {
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 12px;
+  font-size: 13px;
+}
+
+.log:empty::before {
+  content: "Chưa có hoạt động nào.";
+  color: var(--faint);
 }
 
 .log__item {
   display: grid;
-  grid-template-columns: 38px 1fr;
-  gap: 6px;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--line);
+  grid-template-columns: 48px 1fr;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 0.07);
+  animation: log-in 0.35s ease-out;
 }
 
 .log__item time {
-  color: var(--muted);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .log__item--ok span {
@@ -461,65 +906,621 @@ details.disk summary {
   color: var(--err);
 }
 
-/* ── Thanh trạng thái ─────────────────────────────────────────────────── */
+@keyframes log-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
 
-.status {
-  padding: 8px 16px;
-  border-top: 1px solid var(--line);
-  background: var(--panel);
+/* ── Cài đặt ──────────────────────────────────────────────────────────── */
+
+.setting {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+}
+
+.setting:last-child {
+  border-bottom: 0;
+}
+
+.setting__label {
+  font-weight: 600;
+}
+
+.setting__hint {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setting select {
+  min-width: 220px;
+}
+
+/* ── Thông báo ────────────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  max-width: min(720px, calc(100vw - 48px));
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: rgb(10 6 20 / 0.55);
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0;
+  transform: translate(-50%, 12px);
+  pointer-events: none;
+  transition:
+    opacity 0.25s,
+    transform 0.35s cubic-bezier(0.34, 1.45, 0.64, 1);
 }
 
-.status--ok {
+.toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.toast--ok {
   color: var(--ok);
 }
 
-.status--error {
-  color: var(--err);
+.toast--error {
+  color: #ffc4cd;
+  border-color: color-mix(in srgb, var(--err) 50%, transparent);
 }
 
 /* ── Hộp đăng nhập ────────────────────────────────────────────────────── */
 
 dialog {
-  background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 20px;
-  width: 380px;
+  padding: 24px;
+  width: 400px;
+  border-radius: 20px;
+  background: rgb(20 12 36 / 0.5);
 }
 
 dialog::backdrop {
-  background: rgb(0 0 0 / 0.55);
+  background: rgb(5 3 14 / 0.35);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+dialog[open] {
+  animation: dialog-in 0.25s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
 }
 
 dialog h3 {
   margin: 0 0 6px;
+  font-size: 18px;
 }
 
 dialog p.muted {
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   font-size: 12px;
 }
 
 dialog input {
   display: block;
   width: 100%;
-  margin-bottom: 8px;
+  margin-bottom: 9px;
 }
 
 .login-msg {
   min-height: 18px;
   font-size: 12px;
   color: var(--warn);
-  margin: 4px 0 10px;
+  margin: 4px 0 12px;
 }
 
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ── Tài khoản Steam đang đăng nhập ───────────────────────────────────── */
+
+.acct {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px 3px 3px;
+  border-radius: 999px;
+  background: rgb(10 6 20 / 0.36);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  font-size: 12px;
+  max-width: 220px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.acct__avatar {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #1b2838 0%, #2a475e 100%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+}
+
+.acct__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.acct__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acct__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.acct--on .acct__dot {
+  background: #66c0f4;
+  box-shadow: 0 0 8px #66c0f4;
+}
+
+.acct--off {
+  color: var(--muted);
+}
+
+.acct--off .acct__avatar {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+
+@media (max-width: 1250px) {
+  .acct {
+    max-width: 150px;
+  }
+}
+
+/* Rất hẹp: chip chỉ còn ảnh đại diện + chấm, tên xem khi rê chuột. */
+@media (max-width: 980px) {
+  .acct__name {
+    display: none;
+  }
+
+  .acct {
+    padding-right: 8px;
+  }
+}
+
+/* ── Giảm chuyển động ─────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ── Cửa sổ hẹp ───────────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .view--games {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .cloud-status {
+    display: none;
+  }
+
+  .playing {
+    max-width: 180px;
+  }
+}
+
+/* ── Steam Cloud ──────────────────────────────────────────────────────── */
+
+/* Chip trên thanh: đỏ nhấp nháy = đang bật, xanh = đã tắt. */
+button.scloud {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  background: rgb(10 6 20 / 0.36);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.scloud__icon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  opacity: 0.85;
+}
+
+.scloud__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.scloud--on {
+  color: #ffd1d8;
+  border-color: color-mix(in srgb, var(--err) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--err) 14%, rgb(10 6 20 / 0.4)) !important;
+}
+
+.scloud--on .scloud__dot {
+  background: var(--err);
+  box-shadow: 0 0 10px var(--err);
+  animation: scloud-pulse 1.4s ease-in-out infinite;
+}
+
+.scloud--off .scloud__dot {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+
+.scloud--queued .scloud__dot {
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+}
+
+.scloud-pop__title--queued::before {
+  background: var(--warn) !important;
+  box-shadow: 0 0 8px var(--warn);
+}
+
+.scloud--busy .scloud__dot {
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+  animation: scloud-pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes scloud-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scloud__dot {
+    animation: none !important;
+  }
+}
+
+/* Bảng nhỏ bật ra dưới chip. */
+.scloud-pop {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 50;
+  width: 320px;
+  padding: 16px 18px;
+  display: grid;
+  gap: 10px;
+  background: rgb(16 10 30 / 0.72);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+}
+
+.scloud-pop[hidden] {
+  display: none;
+}
+
+.scloud-pop h3 {
+  margin: 0;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scloud-pop h3::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.scloud-pop__title--on::before {
+  background: var(--err) !important;
+  box-shadow: 0 0 10px var(--err);
+}
+
+.scloud-pop__title--off::before {
+  background: var(--ok) !important;
+  box-shadow: 0 0 8px var(--ok);
+}
+
+.scloud-pop__title--busy::before {
+  background: var(--warn) !important;
+}
+
+.scloud-pop__text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.scloud-pop__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.scloud-pop__actions button.danger {
+  background: color-mix(in srgb, var(--err) 30%, transparent);
+  border-color: color-mix(in srgb, var(--err) 55%, transparent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.scloud-pop__auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding-top: 10px;
+  border-top: 1px solid rgb(255 255 255 / 0.08);
+  cursor: pointer;
+}
+
+.scloud-pop__auto input {
+  accent-color: var(--ok);
+  width: 15px;
+  height: 15px;
+}
+
+/* Công tắc gạt dùng trong Cài đặt. */
+input.switch {
+  appearance: none;
+  flex: none;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+input.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+input.switch:checked {
+  background: color-mix(in srgb, var(--ok) 70%, transparent);
+}
+
+input.switch:checked::after {
+  transform: translateX(18px);
+}
+
+/* Hẹp: chip chỉ còn biểu tượng + chấm. */
+@media (max-width: 1250px) {
+  .scloud__label {
+    display: none;
+  }
+}
+
+/* Thanh trượt trong Cài đặt (độ trong của kính). */
+.range {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 260px;
+}
+
+.range output {
+  width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Thanh trượt "liquid glass" (liquid-slider.ts). */
+.lslider {
+  position: relative;
+  flex: 1;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+.lslider__track {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgb(215 218 226 / 0.34);
+  overflow: hidden;
+}
+
+.lslider__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 50%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2a7bff 0%, #3d8eff 100%);
+}
+
+/* Viên kính trong: sáng, viền xanh nhạt, phóng to phần rãnh bên dưới như
+   thấu kính (filter #liquid-glass trong index.html). */
+.lslider__thumb {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 62px;
+  height: 38px;
+  margin-top: -19px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.1);
+  box-shadow:
+    inset 0 0 0 1px rgb(196 224 255 / 0.75),
+    inset 0 0 10px rgb(255 255 255 / 0.35),
+    inset 0 -4px 10px rgb(170 205 255 / 0.18),
+    0 3px 12px rgb(20 40 90 / 0.18);
+  -webkit-backdrop-filter: url(#liquid-glass) blur(1.2px) brightness(1.18) saturate(1.25);
+  backdrop-filter: url(#liquid-glass) blur(1.2px) brightness(1.18) saturate(1.25);
+  transform-origin: center;
+  will-change: transform;
+  pointer-events: none;
+  transition: box-shadow 0.2s ease;
+}
+
+.lslider.is-dragging .lslider__thumb,
+.lslider:focus-visible .lslider__thumb {
+  box-shadow:
+    inset 0 0 0 1px rgb(170 210 255 / 0.95),
+    inset 0 0 12px rgb(255 255 255 / 0.45),
+    inset 0 -4px 10px rgb(170 205 255 / 0.22),
+    0 0 0 4px rgb(79 158 255 / 0.18),
+    0 4px 16px rgb(20 40 90 / 0.25);
+}
+
+/* Cài đặt: dòng có phần phụ bên dưới (lưới ảnh nền). */
+.setting--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.setting__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.bg-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.bg-thumbs[hidden] {
+  display: none;
+}
+
+.bg-thumb {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: 10px;
+  background: center / cover no-repeat rgb(255 255 255 / 0.06);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.bg-thumb:hover {
+  transform: translateY(-2px);
+  border-color: rgb(255 255 255 / 0.4);
+}
+
+.bg-thumb.is-current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.bg-thumb__x {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  color: #fff;
+  background: rgb(10 6 20 / 0.6);
+  border: 1px solid rgb(255 255 255 / 0.25);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.bg-thumb:hover .bg-thumb__x,
+.bg-thumb__x:focus-visible {
+  opacity: 1;
+}
+
+.bg-thumb__x:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--err) 70%, black);
+}
+
+/* Ghi công ảnh nền lấy từ web — góc dưới bên trái, rất mờ cho đỡ vướng. */
+.bg-credit {
+  position: fixed;
+  left: 14px;
+  bottom: 8px;
+  z-index: 5;
+  max-width: 45vw;
+  font-size: 11px;
+  color: rgb(255 255 255 / 0.55);
+  text-decoration: none;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bg-credit:hover {
+  color: rgb(255 255 255 / 0.9);
+  text-decoration: underline;
+}
+
+.bg-credit[hidden] {
+  display: none;
 }

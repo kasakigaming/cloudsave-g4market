@@ -3,6 +3,7 @@
 //! Không module nào ở đây cần mạng, cần đăng nhập, hay cần Steam đang chạy.
 
 pub mod appinfo;
+pub mod cloudcfg;
 pub mod locate;
 pub mod remotecache;
 pub mod roots;

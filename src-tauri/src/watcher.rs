@@ -28,6 +28,12 @@ const POLL: Duration = Duration::from_secs(2);
 const SETTLE: Duration = Duration::from_secs(3);
 /// `appmanifest_*.acf` chỉ đổi khi cài / gỡ game, không cần đọc lại mỗi 2 giây.
 const INSTALLED_REFRESH: Duration = Duration::from_secs(60);
+/// Chu kỳ ghi sẵn "tắt Steam Cloud" cho các tài khoản không đăng nhập.
+const PREAPPLY_EVERY: Duration = Duration::from_secs(10);
+/// Bấm tắt qua giao diện Steam thất bại thì bao lâu sau mới thử lại.
+const UI_RETRY: Duration = Duration::from_secs(10 * 60);
+/// Báo trước bao lâu rồi mới "mượn" chuột để bấm trong Steam.
+const UI_COUNTDOWN: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RunningGame {
@@ -56,9 +62,45 @@ async fn run(app: AppHandle) {
     let mut pending: Vec<(u32, Instant)> = Vec::new();
     let mut installed: BTreeMap<u32, InstalledApp> = BTreeMap::new();
     let mut installed_at: Option<Instant> = None;
+    // Tài khoản Steam đang đăng nhập lần kiểm tra trước; `Some(None)` = Steam
+    // tắt. Bắt đầu bằng `None` để lần đầu luôn báo cho UI.
+    let mut last_user: Option<Option<u32>> = None;
+    let mut last_cloud: Option<crate::steam_cloud::SteamCloudStatus> = None;
+    let mut preapply_at: Option<Instant> = None;
+    let mut preapply_recent = std::collections::HashMap::new();
+    let mut ui_tried: std::collections::HashMap<u32, Instant> = std::collections::HashMap::new();
 
     loop {
         let state = app.state::<AppState>();
+
+        // Steam đổi tài khoản (hoặc bật / tắt): đổi theo và báo UI. Chỉ đổi
+        // tài khoản theo dõi khi Steam THẬT SỰ đổi, để lựa chọn tay trong Cài
+        // đặt không bị ghi đè mỗi 2 giây.
+        let live = crate::steam::locate::active_user_now();
+        if last_user != Some(live) {
+            if let Some(id) = live {
+                if state.watch_account() != Some(id) {
+                    log::info!("Steam đổi sang tài khoản {id}");
+                    state.set_watch_account(id);
+                }
+            }
+            last_user = Some(live);
+            // Phiên đăng nhập mới: đọc lại từ file, không dùng kết quả bấm cũ.
+            *state.steam_cloud.ui_disabled.lock().unwrap() = None;
+            let info = crate::commands::steam_account_info(&state);
+            match (&live, &info) {
+                (Some(_), Some(a)) => log::info!(
+                    "Steam đang đăng nhập: {} ({}) — app theo dõi tài khoản {}",
+                    a.persona_name.as_deref().unwrap_or("?"),
+                    a.account_id,
+                    state.watch_account().map_or("?".into(), |x| x.to_string())
+                ),
+                (None, _) => log::info!("Steam đã tắt hoặc chưa đăng nhập"),
+                _ => {}
+            }
+            let _ = app.emit("steam-account", info);
+        }
+
         if let Ok(steam) = state.steam() {
             if installed_at.map_or(true, |t| t.elapsed() > INSTALLED_REFRESH) {
                 installed = steam.installed_apps();
@@ -83,6 +125,72 @@ async fn run(app: AppHandle) {
                 state.set_running(running.clone());
                 let _ = app.emit("running-games", state.running_games().await);
                 prev = running;
+            }
+
+            // Steam Cloud: báo UI khi đổi.
+            let cloud = crate::steam_cloud::status(&state, crate::steam_cloud::steam_running_in(&sys));
+            if last_cloud.as_ref() != Some(&cloud) {
+                if last_cloud.as_ref().map(|c| (c.account_id, c.state)) != Some((cloud.account_id, cloud.state)) {
+                    log::info!(
+                        "Steam Cloud của tài khoản {}: {:?}{}",
+                        cloud.account_id.map_or("?".into(), |x| x.to_string()),
+                        cloud.state,
+                        if cloud.logged_in { " (đang đăng nhập)" } else { "" }
+                    );
+                }
+                let _ = app.emit("steam-cloud", &cloud);
+                last_cloud = Some(cloud);
+            }
+
+            // Tự động: ghi sẵn "tắt" cho các tài khoản đang KHÔNG đăng nhập, để
+            // lần đăng nhập tới Steam đọc được. Không bao giờ khởi động lại Steam.
+            if state.steam_cloud.auto_disable.load(std::sync::atomic::Ordering::Relaxed)
+                && preapply_at.map_or(true, |t| t.elapsed() > PREAPPLY_EVERY)
+            {
+                preapply_at = Some(Instant::now());
+                let known: Vec<u32> = steam.users.iter().map(|u| u.account_id).collect();
+                let active = if crate::steam_cloud::steam_running_in(&sys) { live } else { None };
+                let done = crate::steam_cloud::preapply_inactive(
+                    &steam.root,
+                    &crate::steam_cloud::backup_dir(),
+                    &known,
+                    active,
+                    &mut preapply_recent,
+                );
+                if !done.is_empty() {
+                    log::info!("đã ghi sẵn tắt Steam Cloud cho {} tài khoản: {done:?}", done.len());
+                }
+            }
+
+            // Tự động, tài khoản ĐANG đăng nhập còn bật: bấm tắt trong Settings
+            // của Steam (OCR). Không làm khi đang chơi game.
+            if let (true, true, Some(acc)) = (
+                state.steam_cloud.auto_disable.load(std::sync::atomic::Ordering::Relaxed),
+                cloud_on_now(&last_cloud) && prev.is_empty(),
+                last_cloud.as_ref().and_then(|c| c.account_id),
+            ) {
+                if ui_tried.get(&acc).map_or(true, |t| t.elapsed() > UI_RETRY) {
+                    ui_tried.insert(acc, Instant::now());
+                    log::info!("tự động tắt Steam Cloud qua giao diện Steam sau {UI_COUNTDOWN:?}");
+                    let _ = app.emit(
+                        "steam-cloud-ui",
+                        "Sắp tắt Steam Cloud trong cửa sổ Steam — đừng động vào chuột vài giây",
+                    );
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(UI_COUNTDOWN).await;
+                        let st = app2.state::<AppState>();
+                        match crate::steam_cloud::set_enabled(&st, false).await {
+                            Ok(s) => {
+                                let _ = app2.emit("steam-cloud", &s);
+                            }
+                            Err(e) => {
+                                log::warn!("tự động tắt Steam Cloud qua giao diện thất bại: {e}");
+                                let _ = app2.emit("steam-cloud-ui-error", e.to_string());
+                            }
+                        }
+                    });
+                }
             }
 
             // Chỉ chụp game đã tắt đủ lâu VÀ chưa bật lại.
@@ -277,4 +385,13 @@ mod tests {
         let exe = PathBuf::from(r"\\?\C:\Steam\steamapps\common\Game\a.exe");
         assert_eq!(owning_app(&exe, &i), Some(1));
     }
+}
+
+/// Tài khoản đang đăng nhập và Steam Cloud của nó còn bật (chưa bấm tắt).
+fn cloud_on_now(c: &Option<crate::steam_cloud::SteamCloudStatus>) -> bool {
+    c.as_ref().is_some_and(|c| {
+        c.logged_in
+            && !c.busy
+            && matches!(c.state, crate::steam_cloud::CloudState::On | crate::steam_cloud::CloudState::Queued)
+    })
 }

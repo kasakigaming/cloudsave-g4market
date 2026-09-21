@@ -23,6 +23,7 @@ use crate::restore::{self, RestoreReport};
 use crate::scan::{slugify, GameScan, Scanner};
 use crate::state::AppState;
 use crate::steam::{RootContext, SteamUser};
+use crate::steam_cloud::SteamCloudStatus;
 use crate::supabase::{Session, SignUpOutcome};
 use crate::watcher::{self, GameChecked, RunningGame};
 
@@ -105,6 +106,83 @@ pub async fn detect_steam(state: State<'_, AppState>) -> Result<SteamStatus> {
 }
 
 /// Đổi tài khoản Steam mà watcher và các lần chụp dùng.
+/// Tài khoản Steam cho chip trên thanh trên cùng.
+#[derive(Debug, Clone, Serialize)]
+pub struct SteamAccount {
+    pub account_id: u32,
+    pub steam_id64: String,
+    pub persona_name: Option<String>,
+    pub account_name: Option<String>,
+    /// Steam đang chạy và đang đăng nhập đúng tài khoản này.
+    pub logged_in: bool,
+    /// Ảnh đại diện dạng data URL, nếu Steam đã cache.
+    pub avatar: Option<String>,
+}
+
+/// Dựng thông tin chip: tài khoản Steam đang đăng nhập nếu có, không thì tài
+/// khoản app đang theo dõi (lần đăng nhập gần nhất).
+pub fn steam_account_info(state: &AppState) -> Option<SteamAccount> {
+    use base64::Engine;
+    let steam = state.steam().ok()?;
+    let live = crate::steam::locate::active_user_now();
+    let id = live.or_else(|| state.watch_account())?;
+    let u = steam.user_info(id);
+    let avatar = std::fs::read(steam.avatar_file(id)).ok().map(|b| {
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b)
+        )
+    });
+    Some(SteamAccount {
+        account_id: id,
+        steam_id64: u.steam_id64,
+        persona_name: u.persona_name,
+        account_name: u.account_name,
+        logged_in: live == Some(id),
+        avatar,
+    })
+}
+
+#[tauri::command]
+pub fn steam_account(state: State<'_, AppState>) -> Option<SteamAccount> {
+    steam_account_info(&state)
+}
+
+#[tauri::command]
+pub fn steam_cloud_status(state: State<'_, AppState>) -> SteamCloudStatus {
+    crate::steam_cloud::status_now(&state)
+}
+
+/// Bật / tắt Steam Cloud. Tài khoản đang đăng nhập thì gạt công tắc trong
+/// Settings của Steam (OCR, `steam_ui.rs`), không khởi động lại Steam.
+#[tauri::command]
+pub async fn set_steam_cloud(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<SteamCloudStatus> {
+    let st = crate::steam_cloud::set_enabled(&state, enabled).await?;
+    let _ = app.emit("steam-cloud", &st);
+    Ok(st)
+}
+
+#[tauri::command]
+pub fn set_auto_disable_steam_cloud(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<SteamCloudStatus> {
+    crate::steam_cloud::save_auto_disable(on)?;
+    state
+        .steam_cloud
+        .auto_disable
+        .store(on, std::sync::atomic::Ordering::Relaxed);
+    log::info!("tự động tắt Steam Cloud: {}", if on { "bật" } else { "tắt" });
+    let st = crate::steam_cloud::status_now(&state);
+    let _ = app.emit("steam-cloud", &st);
+    Ok(st)
+}
+
 #[tauri::command]
 pub fn set_account(state: State<'_, AppState>, account_id: u32) {
     state.set_watch_account(account_id);
@@ -261,6 +339,10 @@ pub async fn scan_all(
     }
 
     let _ = app.emit("scan-progress", ScanProgress::Done);
+    log::info!(
+        "quét xong tài khoản {account_id}: {} game — {} bản mới, {} không đổi, {} không có save, {} đang chạy, {} lỗi",
+        report.total, report.created, report.unchanged, report.empty, report.skipped_running, report.failed
+    );
     Ok(report)
 }
 
@@ -428,9 +510,29 @@ pub async fn restore_snapshot(
 pub async fn delete_snapshot(state: State<'_, AppState>, snapshot_id: String) -> Result<i64> {
     let sb = state.sb()?;
     sb.delete_snapshot(&snapshot_id).await?;
+    // Bản local tương ứng không còn nằm trên cloud nữa — gỡ dấu cloud, nếu
+    // không danh sách game vẫn hiện "☁ cloud" cho một bản đã mất.
+    state.store.forget_remote(&snapshot_id)?;
     // Xoá snapshot không tự giải phóng dung lượng: blob còn đó cho tới khi
     // không snapshot nào tham chiếu nữa.
     sb.gc().await
+}
+
+/// Đối chiếu dấu "đã lên cloud" của kho local với danh sách thật trên cloud,
+/// gỡ dấu của những bản đã bị xoá ở nơi khác (Dashboard, máy khác). Trả về
+/// số bản đã gỡ dấu; 0 nếu chưa đăng nhập hoặc không đối chiếu được an toàn.
+#[tauri::command]
+pub async fn reconcile_cloud(state: State<'_, AppState>) -> Result<usize> {
+    let Some(sb) = &state.supabase else {
+        return Ok(0);
+    };
+    if sb.session().await.is_none() {
+        return Ok(0);
+    }
+    match sb.remote_ids().await? {
+        Some(alive) => state.store.forget_missing_remote(&alive),
+        None => Ok(0),
+    }
 }
 
 #[tauri::command]
@@ -451,4 +553,42 @@ impl AppState {
     fn sb(&self) -> Result<&crate::supabase::Supabase> {
         self.supabase.as_ref().ok_or(Error::NotConfigured)
     }
+}
+
+// ── Ảnh nền tự chọn ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_backgrounds() -> Vec<crate::backgrounds::BgImage> {
+    crate::backgrounds::list_in(&crate::backgrounds::dir())
+}
+
+/// Mở hộp thoại chọn ảnh (chọn được nhiều), chép vào thư mục nền của app.
+/// Người dùng bấm huỷ thì trả về danh sách rỗng.
+#[tauri::command]
+pub async fn pick_backgrounds(app: AppHandle) -> Result<crate::backgrounds::AddReport> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Chọn ảnh nền")
+        .add_filter("Ảnh", &["jpg", "jpeg", "png", "webp", "avif", "gif", "bmp"])
+        .blocking_pick_files()
+        .unwrap_or_default();
+    let paths: Vec<std::path::PathBuf> = picked.into_iter().filter_map(|f| f.into_path().ok()).collect();
+    let report = crate::backgrounds::add_in(&crate::backgrounds::dir(), &paths)?;
+    if !report.added.is_empty() {
+        log::info!("đã thêm {} ảnh nền", report.added.len());
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+pub fn remove_background(id: String) -> Result<()> {
+    crate::backgrounds::remove_in(&crate::backgrounds::dir(), &id)
+}
+
+/// Một loạt ảnh phong cảnh ngẫu nhiên từ Wikimedia Commons (chế độ xoay vòng).
+#[tauri::command]
+pub async fn web_backgrounds() -> Result<Vec<crate::web_backgrounds::WebPhoto>> {
+    crate::web_backgrounds::fetch_batch().await
 }

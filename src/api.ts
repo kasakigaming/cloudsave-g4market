@@ -23,6 +23,44 @@ export interface SteamStatus {
   active_account: number | null;
 }
 
+export interface SteamAccount {
+  account_id: number;
+  steam_id64: string;
+  persona_name: string | null;
+  account_name: string | null;
+  logged_in: boolean;
+  avatar: string | null;
+}
+
+export interface SteamCloudStatus {
+  account_id: number | null;
+  /** queued = còn bật, nhưng app đã ghi sẵn "tắt" cho lần đăng nhập tới. */
+  state: "on" | "queued" | "off" | "unknown";
+  steam_running: boolean;
+  /** Tài khoản này đang đăng nhập Steam ngay lúc này. */
+  logged_in: boolean;
+  auto_disable: boolean;
+  busy: boolean;
+  error: string | null;
+}
+
+export interface BgImage {
+  id: string;
+  path: string;
+}
+
+export interface WebPhoto {
+  url: string;
+  author: string;
+  license: string;
+  page: string;
+}
+
+export interface AddBgReport {
+  added: BgImage[];
+  skipped: string[];
+}
+
 export interface GameCandidate {
   app_id: number;
   title: string;
@@ -174,6 +212,15 @@ export const api = {
   // Steam
   detectSteam: () => invoke<SteamStatus>("detect_steam"),
   setAccount: (accountId: number) => invoke<void>("set_account", { accountId }),
+  steamAccount: () => invoke<SteamAccount | null>("steam_account"),
+  listBackgrounds: () => invoke<BgImage[]>("list_backgrounds"),
+  pickBackgrounds: () => invoke<AddBgReport>("pick_backgrounds"),
+  removeBackground: (id: string) => invoke<void>("remove_background", { id }),
+  webBackgrounds: () => invoke<WebPhoto[]>("web_backgrounds"),
+  steamCloudStatus: () => invoke<SteamCloudStatus>("steam_cloud_status"),
+  setSteamCloud: (enabled: boolean) => invoke<SteamCloudStatus>("set_steam_cloud", { enabled }),
+  setAutoDisableSteamCloud: (on: boolean) =>
+    invoke<SteamCloudStatus>("set_auto_disable_steam_cloud", { on }),
   listGames: (accountId: number) => invoke<GameCandidate[]>("list_games", { accountId }),
   scanGame: (accountId: number, appId: number) =>
     invoke<GameScan>("scan_game", { accountId, appId }),
@@ -200,6 +247,7 @@ export const api = {
   restoreRemote: (snapshotId: string, appId: number) =>
     invoke<RestoreReport>("restore_snapshot", { snapshotId, appId }),
   deleteRemote: (snapshotId: string) => invoke<number>("delete_snapshot", { snapshotId }),
+  reconcileCloud: () => invoke<number>("reconcile_cloud"),
 
   refreshManifest: () => invoke<number>("refresh_manifest"),
   deviceInfo: () => invoke<{ id: string; name: string; store: string }>("device_info"),

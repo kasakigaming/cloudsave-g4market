@@ -289,6 +289,40 @@ impl LocalStore {
         Ok(snap)
     }
 
+    /// Gỡ đánh dấu "đã lên cloud" của mọi bản local không còn bản tương ứng
+    /// trên cloud (bị xoá trong app, trong Dashboard, hay từ máy khác).
+    /// `alive` là tập id snapshot hiện có trên cloud. Trả về số bản đã gỡ.
+    pub fn forget_missing_remote(
+        &self,
+        alive: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        let mut cleared = 0;
+        for mut snap in self.list(None)? {
+            let gone = snap.remote_id.as_ref().is_some_and(|r| !alive.contains(r));
+            if gone {
+                snap.remote_id = None;
+                snap.pushed_at = None;
+                self.write_snapshot(&snap)?;
+                cleared += 1;
+            }
+        }
+        Ok(cleared)
+    }
+
+    /// Gỡ đánh dấu của những bản local trỏ tới một snapshot cloud vừa bị xoá.
+    pub fn forget_remote(&self, remote_id: &str) -> Result<usize> {
+        let mut cleared = 0;
+        for mut snap in self.list(None)? {
+            if snap.remote_id.as_deref() == Some(remote_id) {
+                snap.remote_id = None;
+                snap.pushed_at = None;
+                self.write_snapshot(&snap)?;
+                cleared += 1;
+            }
+        }
+        Ok(cleared)
+    }
+
     /// Giữ `keep` bản mới nhất của một game, xoá phần còn lại rồi dọn blob.
     pub fn prune(&self, slug: &str, keep: usize) -> Result<usize> {
         let all = self.list(Some(slug))?;
@@ -526,6 +560,37 @@ mod tests {
             store.read_blob(hash),
             Err(Error::ChecksumMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn forgets_cloud_marks_that_no_longer_exist() {
+        let saves = tmpdir();
+        let store_dir = tmpdir();
+        let store = LocalStore::open(&store_dir.0).unwrap();
+        let mut ids = Vec::new();
+        for (i, v) in [b"v1".as_slice(), b"v2"].iter().enumerate() {
+            let scan = scan_of(&saves.0, &[("s.sav", v)]);
+            let CaptureOutcome::Created { snapshot } =
+                store.capture(&scan, 1, Trigger::Manual).unwrap()
+            else {
+                panic!()
+            };
+            store
+                .mark_pushed(&snapshot.id, &format!("remote-{i}"))
+                .unwrap();
+            ids.push(snapshot.id);
+        }
+        // Trên cloud chỉ còn remote-1: bản trỏ tới remote-0 phải mất dấu cloud.
+        let alive: std::collections::HashSet<String> = ["remote-1".to_string()].into();
+        assert_eq!(store.forget_missing_remote(&alive).unwrap(), 1);
+        assert!(store.get(&ids[0]).unwrap().remote_id.is_none());
+        assert_eq!(
+            store.get(&ids[1]).unwrap().remote_id.as_deref(),
+            Some("remote-1")
+        );
+
+        assert_eq!(store.forget_remote("remote-1").unwrap(), 1);
+        assert!(store.get(&ids[1]).unwrap().remote_id.is_none());
     }
 
     #[test]

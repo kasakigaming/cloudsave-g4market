@@ -18,6 +18,8 @@
 //!    bytea đã nén và cắt chunk, có SHA-256 kiểm chứng. Cột `preview` chỉ để
 //!    hiển thị và không bao giờ tham gia vào việc dựng lại file.
 
+pub mod applog;
+pub mod backgrounds;
 pub mod backup;
 pub mod blob;
 pub mod commands;
@@ -31,13 +33,19 @@ pub mod restore;
 pub mod scan;
 pub mod state;
 pub mod steam;
+pub mod steam_cloud;
+#[cfg(windows)]
+pub mod steam_ui;
 pub mod supabase;
 pub mod watcher;
+pub mod web_backgrounds;
 
 use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    applog::init();
+    log::info!("khởi động {}", env!("CARGO_PKG_VERSION"));
     load_dotenv();
 
     tauri::Builder::default()
@@ -54,9 +62,13 @@ pub fn run() {
             // Steam
             commands::detect_steam,
             commands::set_account,
+            commands::steam_account,
             commands::list_games,
             commands::scan_game,
             commands::running_games,
+            commands::steam_cloud_status,
+            commands::set_steam_cloud,
+            commands::set_auto_disable_steam_cloud,
             // Local
             commands::scan_all,
             commands::capture_game,
@@ -72,9 +84,14 @@ pub fn run() {
             commands::list_snapshots,
             commands::restore_snapshot,
             commands::delete_snapshot,
+            commands::reconcile_cloud,
             // Khác
             commands::refresh_manifest,
             commands::device_info,
+            commands::list_backgrounds,
+            commands::pick_backgrounds,
+            commands::remove_background,
+            commands::web_backgrounds,
         ])
         .run(tauri::generate_context!())
         .expect("không khởi động được cửa sổ Tauri");

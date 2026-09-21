@@ -559,6 +559,31 @@ impl Supabase {
         self.rest(Method::GET, &q, None, None).await
     }
 
+    /// Id mọi snapshot hoàn chỉnh của người dùng trên cloud. `None` nếu danh
+    /// sách có thể bị cắt cụt (PostgREST của Supabase giới hạn 1000 dòng mỗi
+    /// lần): đối chiếu với một danh sách cụt sẽ gỡ nhầm dấu cloud của bản cũ.
+    pub async fn remote_ids(&self) -> Result<Option<std::collections::HashSet<String>>> {
+        const CAP: usize = 1000;
+        let v = self
+            .rest(
+                Method::GET,
+                &format!("snapshots?select=id&status=eq.complete&limit={CAP}"),
+                None,
+                None,
+            )
+            .await?;
+        let rows = v.as_array().cloned().unwrap_or_default();
+        if rows.len() >= CAP {
+            log::warn!("có từ {CAP} snapshot trở lên, bỏ qua đối chiếu cloud");
+            return Ok(None);
+        }
+        Ok(Some(
+            rows.iter()
+                .filter_map(|r| r.get("id")?.as_str().map(str::to_owned))
+                .collect(),
+        ))
+    }
+
     pub async fn snapshot_files(&self, snapshot_id: &str) -> Result<Value> {
         self.rest(
             Method::GET,

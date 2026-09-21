@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "cloudsave-g4market"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "brotli 7.0.0",
@@ -581,6 +581,7 @@ dependencies = [
  "tokio",
  "uuid",
  "walkdir",
+ "windows 0.61.3",
  "winreg 0.52.0",
  "xz2",
  "zstd",
@@ -1688,6 +1689,12 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "http-range"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21dec9db110f5f872ed9699c3ecf50cf16f423502706ba5c72462e28d3157573"
 
 [[package]]
 name = "httparse"
@@ -3889,6 +3896,7 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http",
+ "http-range",
  "jni",
  "libc",
  "log",

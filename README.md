@@ -22,6 +22,32 @@ Sao lưu save game lên Supabase. Đọc đường dẫn save từ chính dữ l
 nhập, và đẩy **đúng bản đã chụp** chứ không quét lại đĩa — thứ bạn thấy trong
 danh sách là thứ lên cloud.
 
+**Theo tài khoản Steam đang đăng nhập.** Chip trên thanh trên cùng hiện tài
+khoản Steam đang đăng nhập (đọc `ActiveProcess\ActiveUser` trong registry).
+Đổi tài khoản trong Steam thì app đổi theo và quét lại save ngay.
+
+### Tắt Steam Cloud
+
+Steam Cloud bật song song với CloudSave là hai bên cùng giữ một bộ save: khôi
+phục xong, Steam có thể đồng bộ đè bản cũ trên cloud của nó xuống. Chip
+"Steam Cloud" báo đỏ khi đang bật, xanh khi đã tắt. Bật "Tự động tắt Steam
+Cloud" (Cài đặt) thì:
+
+- **Tài khoản đang đăng nhập:** app mở Settings → Cloud của Steam, đọc màn hình
+  bằng OCR có sẵn của Windows và gạt công tắc — có hiệu lực ngay, không khởi
+  động lại Steam, Steam tự đẩy cài đặt lên server của nó. Giao diện Steam là
+  Chromium đã tắt accessibility, nên không có cách nào khác ngoài "nhìn" màn
+  hình (`steam_ui.rs`). Mỗi lần bấm đều chụp lại để kiểm tra; không chắc thì
+  dừng. Không làm khi đang chơi game.
+- **Các tài khoản khác trên máy:** app ghi sẵn `CloudEnabled "0"` vào
+  `userdata/<id>/7/remote/sharedconfig.vdf` và vào "write-aside store"
+  `userdata/<id>/config/sharedconfig.vdf` mà Steam gộp vào lúc đăng nhập
+  (`steam_cloud.rs`). Chỉ sửa file trong `remote/` là không đủ: Steam lấy bản
+  trên server đè xuống. Bản gốc được giữ ở
+  `%LOCALAPPDATA%\cloudsave-g4market\steam-backup\`.
+
+Thử riêng phần OCR, không bấm gì: `cargo run --example steam_cloud_ui`.
+
 ## Ý tưởng
 
 Bốn quyết định thiết kế, và lý do đằng sau mỗi cái.
@@ -215,12 +241,19 @@ src-tauri/src/
 │  ├─ appinfo.rs      parser binary VDF (magic 0x07564429, có string table)
 │  ├─ remotecache.rs  parser text VDF + kiểm tra path traversal
 │  ├─ locate.rs       dò Steam root, thư viện, tài khoản
+│  ├─ cloudcfg.rs     đọc / sửa công tắc CloudEnabled trong sharedconfig.vdf
 │  ├─ roots.rs        root token → đường dẫn tuyệt đối
 │  └─ textvdf.rs      parser KeyValues dạng text
 ├─ manifest/ludusavi.rs   tải + cache manifest, map placeholder → root token
 ├─ scan.rs            gộp ba nguồn thành danh sách file, dedupe
 ├─ local_store.rs     kho trên máy: blob nén theo sha256 + snapshot JSON
-├─ watcher.rs         game đang chạy (registry + tiến trình), chụp khi tắt
+├─ watcher.rs         game đang chạy (registry + tiến trình), chụp khi tắt,
+│                     theo dõi tài khoản Steam và Steam Cloud
+├─ steam_cloud.rs     trạng thái Steam Cloud, ghi sẵn cho tài khoản khác
+├─ steam_ui.rs        tắt Steam Cloud qua giao diện Steam (OCR + chuột)
+├─ backgrounds.rs     ảnh nền người dùng tự thêm
+├─ web_backgrounds.rs ảnh nền xoay vòng từ Wikimedia Commons
+├─ applog.rs          log ra %LOCALAPPDATA%\cloudsave-g4market\app.log
 ├─ pack.rs            nén cực hạn: xz/brotli/bzip2/zstd/delta, giữ cái nhỏ nhất
 ├─ remote_blob.rs     upload lát cắt, tải về + giải ngược chuỗi delta
 ├─ blob.rs            sha256 + chunk, định dạng cũ
@@ -264,3 +297,29 @@ và vẫn có đúng thông tin đường dẫn vì cả hai đều lấy từ c
 hình UFS của Steam.
 
 Cách hook chỉ cần thiết khi game phải *tin rằng* Steam Cloud đang hoạt động.
+
+## Ảnh nền
+
+Chọn trong Cài đặt → Hình nền:
+
+- **Hẻm núi** — một ảnh đứng yên.
+- **Xoay vòng ảnh phong cảnh từ web** — đổi ảnh 45 giây một lần, lấy liên tục
+  từ các danh mục ảnh tuyển chọn về phong cảnh và núi trên
+  [Wikimedia Commons](https://commons.wikimedia.org) (không giới hạn). Góc dưới
+  bên trái ghi tác giả và giấy phép của ảnh đang hiện (đa số CC BY-SA), bấm vào
+  mở trang gốc. Mất mạng thì xoay ảnh có sẵn.
+- **Xoay vòng ảnh của bạn** — ảnh tự thêm bằng nút "Thêm ảnh…" (chép vào
+  `%LOCALAPPDATA%\cloudsave-g4market\backgrounds\`).
+
+Thanh "Độ trong suốt" chỉnh độ mờ của các khung kính để thấy rõ nền.
+
+Ảnh có sẵn (nhúng trong `src/assets/`) đều từ Unsplash, dùng theo
+[giấy phép Unsplash](https://unsplash.com/license):
+
+| Ảnh | Tác giả |
+|---|---|
+| [Mesa Arch, Canyonlands](https://unsplash.com/photos/mesa-arch-canyonlands-national-park-aZBpvUNWbsg) (mặc định) | [Ronald Diel](https://unsplash.com/@rondiel) |
+| [Núi tuyết dưới trời sao, Dolomites](https://unsplash.com/photos/snowy-mountains-under-a-starry-night-sky-SumjjLhysZM) | Marek Piwnicki |
+| [Đỉnh núi tuyết dưới trời sao](https://unsplash.com/photos/snowy-mountain-peak-under-a-starry-night-sky-txXfF_2YZpY) | Ahmet Yüksek |
+| [Núi dưới trời sao, Yosemite](https://unsplash.com/photos/mountain-under-starry-sky-_vPbUVNk4Kc) | [Sam Goodgame](https://unsplash.com/@sgoodgame) |
+| [Trời sao trên dãy núi](https://unsplash.com/photos/starry-night-sky-over-majestic-mountains-YPcwPGfX0yM) | [Ryan Klaus](https://unsplash.com/@ryankphoto) |

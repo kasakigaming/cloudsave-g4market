@@ -204,3 +204,28 @@ fn backup_roundtrip_on_real_saves() {
     println!("round-trip byte-exact trên {checked} file thật, {bytes_checked} byte");
     assert!(checked > 0, "không có file save nào để kiểm tra");
 }
+
+#[test]
+#[ignore = "phụ thuộc Steam đang chạy trên máy"]
+fn reads_live_steam_account() {
+    let Some((steam, _)) = load() else { return };
+    let live = cloudsave_lib::steam::locate::active_user_now();
+    println!("Steam đang đăng nhập: {live:?}");
+    let Some(id) = live else {
+        println!("Steam không chạy — bỏ qua");
+        return;
+    };
+    let u = steam.user_info(id);
+    println!(
+        "tên hiển thị: {:?} | có ảnh đại diện: {}",
+        u.persona_name,
+        steam.avatar_file(id).is_file()
+    );
+    assert_eq!(u.account_id, id);
+    assert_eq!(
+        u.steam_id64,
+        (76_561_197_960_265_728u64 + id as u64).to_string()
+    );
+    // App phải chọn đúng tài khoản đang đăng nhập làm mặc định.
+    assert_eq!(steam.active_account_id(), Some(id));
+}

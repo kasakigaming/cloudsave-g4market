@@ -39,6 +39,27 @@ pub struct InstalledApp {
     pub install_dir: PathBuf,
 }
 
+/// Tài khoản Steam đang đăng nhập NGAY LÚC NÀY, đọc từ
+/// `HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser`. Steam ghi giá trị này khi
+/// đang chạy và đã đăng nhập, và đặt về 0 khi thoát — nên `None` nghĩa là
+/// Steam đang tắt hoặc chưa đăng nhập.
+pub fn active_user_now() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let k = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Valve\Steam\ActiveProcess")
+            .ok()?;
+        let id: u32 = k.get_value("ActiveUser").ok()?;
+        (id != 0).then_some(id)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Tìm thư mục cài Steam.
 ///
 /// Registry là nguồn đáng tin nhất vì người dùng hay cài sang ổ khác; các
@@ -130,18 +151,9 @@ impl SteamInstall {
     ///   2. Tài khoản có `Timestamp` mới nhất trong loginusers.vdf.
     ///   3. Tài khoản đầu tiên tìm được.
     pub fn active_account_id(&self) -> Option<u32> {
-        #[cfg(windows)]
-        {
-            use winreg::enums::HKEY_CURRENT_USER;
-            use winreg::RegKey;
-            if let Ok(k) =
-                RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Software\Valve\Steam\ActiveProcess")
-            {
-                if let Ok(id) = k.get_value::<u32, _>("ActiveUser") {
-                    if id != 0 && self.users.iter().any(|u| u.account_id == id) {
-                        return Some(id);
-                    }
-                }
+        if let Some(id) = active_user_now() {
+            if self.users.iter().any(|u| u.account_id == id) {
+                return Some(id);
             }
         }
         self.users
@@ -150,6 +162,29 @@ impl SteamInstall {
             .max_by_key(|u| u.last_login)
             .or_else(|| self.users.first())
             .map(|u| u.account_id)
+    }
+
+    /// Thông tin mới nhất của một tài khoản. Đọc lại `loginusers.vdf` mỗi lần
+    /// gọi, vì tài khoản có thể vừa đăng nhập lần đầu sau khi app đã mở.
+    pub fn user_info(&self, account_id: u32) -> SteamUser {
+        read_users(&self.root)
+            .into_iter()
+            .find(|u| u.account_id == account_id)
+            .unwrap_or_else(|| SteamUser {
+                account_id,
+                steam_id64: (STEAMID64_BASE + account_id as u64).to_string(),
+                account_name: None,
+                persona_name: None,
+                last_login: None,
+            })
+    }
+
+    /// Ảnh đại diện Steam đã cache sẵn (có thể không tồn tại).
+    pub fn avatar_file(&self, account_id: u32) -> PathBuf {
+        self.root
+            .join("config")
+            .join("avatarcache")
+            .join(format!("{}.png", STEAMID64_BASE + account_id as u64))
     }
 
     pub fn appcache_appinfo(&self) -> PathBuf {

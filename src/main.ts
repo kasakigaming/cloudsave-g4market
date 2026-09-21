@@ -1,3 +1,11 @@
+import canyonUrl from "./assets/canyon.webp";
+import dolomitesUrl from "./assets/dolomites.webp";
+import galaxyUrl from "./assets/galaxy.webp";
+import peakUrl from "./assets/peak.webp";
+import yosemiteUrl from "./assets/yosemite.webp";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { liquidSlider } from "./liquid-slider";
 import {
   api,
   authErrorText,
@@ -15,6 +23,8 @@ import {
   type RunningGame,
   type ScanProgress,
   type Session,
+  type SteamAccount,
+  type SteamCloudStatus,
   type SteamUser,
 } from "./api";
 import "./styles.css";
@@ -39,10 +49,73 @@ const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)
 
 const selected = () => games.find((g) => g.app_id === selectedAppId) ?? null;
 
+/// Thông báo ngắn dạng viên thuốc ở đáy màn hình, tự ẩn. Lỗi hiện lâu hơn
+/// vì người dùng cần thời gian đọc; tiến độ ("Đang…") thì ở lại tới khi có
+/// thông báo kế tiếp.
+let toastTimer: number | undefined;
 function setStatus(msg: string, tone: "info" | "error" | "ok" = "info") {
   const el = $("#status");
   el.textContent = msg;
-  el.className = `status status--${tone}`;
+  el.className = `toast toast--${tone} is-visible`;
+  window.clearTimeout(toastTimer);
+  const sticky = tone === "info" && /…$/.test(msg);
+  if (!sticky) {
+    toastTimer = window.setTimeout(() => el.classList.remove("is-visible"), tone === "error" ? 8000 : 4000);
+  }
+}
+
+// ── Điều hướng ───────────────────────────────────────────────────────────
+
+let currentView = "games";
+
+/// Đặt vệt kính sáng lên một nút trong thanh điều hướng.
+function moveGlow(target: HTMLElement) {
+  const glow = $("#nav-glow");
+  glow.style.width = `${target.offsetWidth}px`;
+  glow.style.transform = `translateX(${target.offsetLeft}px)`;
+  glow.style.opacity = "1";
+}
+
+function showView(view: string) {
+  currentView = view;
+  document.querySelectorAll<HTMLElement>(".view").forEach((v) =>
+    v.classList.toggle("is-active", v.dataset.view === view),
+  );
+  document.querySelectorAll<HTMLElement>(".pillnav__item").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.view === view),
+  );
+  if (view === "activity") {
+    unread = 0;
+    renderBadge();
+  }
+  const active = document.querySelector<HTMLElement>(".pillnav__item.is-active");
+  if (active) moveGlow(active);
+}
+
+function initNav() {
+  const nav = $("#nav");
+  const items = nav.querySelectorAll<HTMLElement>(".pillnav__item");
+  items.forEach((b) => {
+    b.addEventListener("click", () => showView(b.dataset.view!));
+    // Vệt sáng đi theo chuột, như mẫu anchor-positioning của Kevin Powell.
+    b.addEventListener("mouseenter", () => moveGlow(b));
+  });
+  nav.addEventListener("mouseleave", () => {
+    const active = nav.querySelector<HTMLElement>(".pillnav__item.is-active");
+    if (active) moveGlow(active);
+  });
+  // Đặt vị trí ban đầu sau khi font đã xếp chữ xong, nếu không độ rộng sai.
+  requestAnimationFrame(() => showView(currentView));
+  window.addEventListener("resize", () => showView(currentView));
+}
+
+// ── Chấm báo tab Hoạt động ───────────────────────────────────────────────
+
+let unread = 0;
+function renderBadge() {
+  const b = $("#activity-badge");
+  b.hidden = unread === 0;
+  b.textContent = unread > 9 ? "9+" : String(unread);
 }
 
 function setBusy(v: boolean) {
@@ -62,6 +135,10 @@ function log(msg: string, tone: "info" | "ok" | "warn" | "error" = "info") {
   const list = $("#log");
   list.prepend(li);
   while (list.children.length > 200) list.lastElementChild?.remove();
+  if (currentView !== "activity" && tone !== "info") {
+    unread += 1;
+    renderBadge();
+  }
 }
 
 // ── Khởi động ────────────────────────────────────────────────────────────
@@ -92,6 +169,8 @@ async function boot() {
 
   running = await api.runningGames();
   renderPlaying();
+  renderSteamAccount(await api.steamAccount());
+  renderSteamCloud(await api.steamCloudStatus());
 
   if (accountId !== null) {
     await refreshGames();
@@ -100,7 +179,312 @@ async function boot() {
   }
 }
 
+// ── Hình nền ─────────────────────────────────────────────────────────────
+
+interface Photo {
+  url: string;
+  /// Điểm neo khi cắt ảnh cho vừa cửa sổ.
+  pos: string;
+  /// Chỉ ảnh người dùng tự thêm mới có (để xoá).
+  id?: string;
+  /// Chỉ ảnh lấy từ web mới có: ghi công tác giả + trang gốc.
+  credit?: string;
+  page?: string;
+}
+
+/// Ảnh có sẵn (Unsplash, giấy phép Unsplash — tác giả ghi trong README). `pos`
+/// chọn để đỉnh núi / vòm đá không bị cắt mất.
+const BUILTIN: Photo[] = [
+  { url: canyonUrl, pos: "center 38%" },
+  { url: dolomitesUrl, pos: "center 70%" },
+  { url: peakUrl, pos: "center 60%" },
+  { url: yosemiteUrl, pos: "center 55%" },
+  { url: galaxyUrl, pos: "center 65%" },
+];
+/// canyon = một ảnh đứng yên; rotate = xoay vòng ảnh từ web (không giới hạn,
+/// mất mạng thì dùng ảnh có sẵn + ảnh tự thêm); mine = chỉ ảnh tự thêm.
+const BACKGROUNDS = ["canyon", "rotate", "mine"];
+/// Mỗi ảnh hiện bao lâu khi xoay vòng.
+const ROTATE_MS = 45_000;
+
+let rotateTimer: number | undefined;
+let bgMode = "canyon";
+/// Ảnh người dùng tự thêm, nạp từ backend (asset protocol).
+let myPhotos: Photo[] = [];
+/// URL ảnh đang hiện — để xoay tiếp đúng chỗ khi danh sách thêm / bớt ảnh.
+let currentUrl = "";
+/// Hàng đợi ảnh từ web; sắp hết thì lấy loạt mới, nên xoay mãi không hết.
+let webQueue: Photo[] = [];
+const webSeen = new Set<string>();
+let webFailedAt = 0;
+let webLoading: Promise<void> | null = null;
+/// Lần đổi ảnh đầu tiên sau khi mở app — sớm hơn để thấy ngay ảnh từ web.
+const FIRST_ROTATE_MS = 8_000;
+
+function readLocal(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* không lưu được thì thôi, lần sau dùng mặc định */
+  }
+}
+
+/// Lấy thêm ảnh từ web khi hàng đợi sắp hết. Lỗi mạng thì 5 phút sau mới thử
+/// lại; trong lúc đó xoay ảnh có sẵn.
+function refillWeb(): Promise<void> {
+  if (webQueue.length >= 3 || Date.now() - webFailedAt < 5 * 60_000) return Promise.resolve();
+  webLoading ??= (async () => {
+    try {
+      const batch = await api.webBackgrounds();
+      for (const w of batch) {
+        if (webSeen.has(w.url)) continue;
+        webSeen.add(w.url);
+        webQueue.push({
+          url: w.url,
+          pos: "center",
+          credit: [w.author, w.license].filter(Boolean).join(" · "),
+          page: w.page,
+        });
+      }
+    } catch (e) {
+      webFailedAt = Date.now();
+      log(`Không tải được ảnh nền từ web: ${errorText(e)} — dùng ảnh có sẵn`, "warn");
+    } finally {
+      webLoading = null;
+    }
+  })();
+  return webLoading;
+}
+
+/// Ảnh kế tiếp khi xoay: ảnh từ web nếu có, không thì vòng qua ảnh có sẵn.
+async function upcomingPhoto(): Promise<Photo> {
+  if (bgMode === "rotate") {
+    await refillWeb();
+    const p = webQueue.shift();
+    void refillWeb();
+    if (p) return p;
+  }
+  return nextPhoto();
+}
+
+/// Bộ ảnh đang xoay. Chưa thêm ảnh nào mà chọn "ảnh của bạn" thì dùng ảnh có sẵn.
+function pool(): Photo[] {
+  if (bgMode === "mine" && myPhotos.length > 0) return myPhotos;
+  if (bgMode === "canyon") return [BUILTIN[0]];
+  return [...BUILTIN, ...myPhotos];
+}
+
+/// Hiện ảnh lên lớp đang ẩn rồi cho nó hiện dần lên trên lớp kia.
+/// Đợi ảnh giải mã xong mới đổi, để không chớp nền trống.
+async function showPhoto(photo: Photo, instant = false) {
+  currentUrl = photo.url;
+  const img = new Image();
+  img.src = photo.url;
+  // Chờ tối đa 3 giây: ảnh lỗi hay giải mã treo thì vẫn đổi, trình duyệt tự
+  // vẽ khi tải xong — không để việc xoay vòng đứng hẳn.
+  await Promise.race([img.decode().catch(() => undefined), new Promise((r) => setTimeout(r, 3000))]);
+  if (currentUrl !== photo.url) return; // đã có lệnh đổi ảnh khác trong lúc chờ
+  const layers = document.querySelectorAll<HTMLElement>(".backdrop__img");
+  const current = [...layers].find((l) => l.classList.contains("is-on")) ?? layers[0];
+  const next = instant ? current : [...layers].find((l) => l !== current) ?? current;
+  next.style.backgroundImage = `url("${photo.url}")`;
+  next.style.backgroundPosition = photo.pos;
+  if (next !== current) {
+    // Khởi động lại hiệu ứng phóng chậm cho ảnh mới.
+    next.style.animation = "none";
+    void next.offsetWidth;
+    next.style.animation = "";
+    next.classList.add("is-on");
+    current.classList.remove("is-on");
+  }
+  writeLocal("cloudsave.bg.url", photo.url);
+  renderCredit(photo);
+  renderMyPhotos();
+}
+
+function renderCredit(photo: Photo) {
+  const el = $<HTMLAnchorElement>("#bg-credit");
+  el.hidden = !photo.credit;
+  el.textContent = photo.credit ? `Ảnh: ${photo.credit} · Wikimedia Commons` : "";
+  el.dataset.page = photo.page ?? "";
+  el.title = "Mở trang gốc của ảnh";
+}
+
+/// Ảnh kế tiếp sau ảnh đang hiện; vòng lại từ đầu, không bao giờ dừng.
+function nextPhoto(): Photo {
+  const list = pool();
+  const i = list.findIndex((p) => p.url === currentUrl);
+  return list[(i + 1) % list.length];
+}
+
+/// Lựa chọn hình nền là tiện ích của riêng máy này, nên để trong localStorage.
+function applyBackground(bg: string) {
+  bgMode = BACKGROUNDS.includes(bg) ? bg : "canyon";
+  document.body.dataset.bg = bgMode === "canyon" ? "canyon" : "rotate";
+  $<HTMLSelectElement>("#bg-select").value = bgMode;
+  writeLocal("cloudsave.bg", bgMode);
+  window.clearInterval(rotateTimer);
+  window.clearTimeout(rotateTimer);
+  rotateTimer = undefined;
+
+  if (bgMode === "canyon") {
+    void showPhoto(BUILTIN[0], true);
+    return;
+  }
+  // Hiện ngay một ảnh có sẵn (tiếp sau ảnh lần trước) để không có nền trống,
+  // rồi chuyển sang ảnh từ web khi tải xong.
+  currentUrl = readLocal("cloudsave.bg.url") ?? "";
+  void showPhoto(nextPhoto(), true);
+  const advance = async () => {
+    const mode = bgMode;
+    const p = await upcomingPhoto();
+    if (mode === bgMode) void showPhoto(p);
+  };
+  rotateTimer = window.setTimeout(() => {
+    void advance();
+    rotateTimer = window.setInterval(() => void advance(), ROTATE_MS);
+  }, FIRST_ROTATE_MS);
+}
+
+// ── Ảnh nền tự thêm ──────────────────────────────────────────────────────
+
+async function loadMyPhotos() {
+  try {
+    const list = await api.listBackgrounds();
+    myPhotos = list.map((b) => ({ url: convertFileSrc(b.path), pos: "center", id: b.id }));
+  } catch (e) {
+    log(`Không đọc được ảnh nền của bạn: ${errorText(e)}`, "error");
+    myPhotos = [];
+  }
+  renderMyPhotos();
+}
+
+function renderMyPhotos() {
+  const box = $("#bg-thumbs");
+  box.innerHTML = myPhotos
+    .map(
+      (p) => `<div class="bg-thumb${p.url === currentUrl ? " is-current" : ""}" data-url="${escapeHtml(p.url)}"
+        style="background-image:url('${escapeHtml(p.url)}')" title="Bấm để hiện ngay">
+        <button type="button" class="bg-thumb__x" data-id="${escapeHtml(p.id ?? "")}" aria-label="Xoá ảnh này">×</button>
+      </div>`,
+    )
+    .join("");
+  box.hidden = myPhotos.length === 0;
+  $("#bg-mine-hint").textContent =
+    myPhotos.length === 0
+      ? "Thêm ảnh từ máy để xoay vòng cùng ảnh có sẵn — bao nhiêu ảnh cũng được."
+      : `${myPhotos.length} ảnh — bấm vào ảnh để hiện ngay, × để xoá.`;
+  const mine = $<HTMLSelectElement>("#bg-select").querySelector<HTMLOptionElement>('option[value="mine"]');
+  if (mine) mine.disabled = myPhotos.length === 0;
+}
+
+async function addMyPhotos() {
+  try {
+    const r = await api.pickBackgrounds();
+    if (r.added.length === 0 && r.skipped.length === 0) return; // bấm huỷ
+    await loadMyPhotos();
+    if (r.added.length > 0) {
+      setStatus(`Đã thêm ${r.added.length} ảnh nền`, "ok");
+      // Đang để một ảnh đứng yên thì chuyển sang xoay vòng để thấy ảnh mới.
+      if (bgMode === "canyon") applyBackground("rotate");
+      const first = myPhotos.find((p) => p.id === r.added[0].id);
+      if (first) void showPhoto(first);
+    }
+    for (const s of r.skipped) log(`Bỏ qua ảnh ${s}`, "warn");
+  } catch (e) {
+    setStatus(`Không thêm được ảnh: ${errorText(e)}`, "error");
+  }
+}
+
+async function removeMyPhoto(id: string) {
+  try {
+    await api.removeBackground(id);
+    const removed = myPhotos.find((p) => p.id === id);
+    await loadMyPhotos();
+    if (bgMode === "mine" && myPhotos.length === 0) applyBackground("rotate");
+    else if (removed && removed.url === currentUrl) void showPhoto(nextPhoto());
+  } catch (e) {
+    setStatus(`Không xoá được ảnh: ${errorText(e)}`, "error");
+  }
+}
+
+function initMyPhotos() {
+  $("#btn-add-bg").addEventListener("click", () => void addMyPhotos());
+  $("#bg-credit").addEventListener("click", (e) => {
+    e.preventDefault();
+    const page = (e.currentTarget as HTMLElement).dataset.page;
+    if (page?.startsWith("https://commons.wikimedia.org/")) void openUrl(page);
+  });
+  $("#bg-thumbs").addEventListener("click", (e) => {
+    const target = e.target as HTMLElement;
+    const x = target.closest<HTMLElement>(".bg-thumb__x");
+    if (x?.dataset.id) {
+      e.stopPropagation();
+      void removeMyPhoto(x.dataset.id);
+      return;
+    }
+    const thumb = target.closest<HTMLElement>(".bg-thumb");
+    const photo = myPhotos.find((p) => p.url === thumb?.dataset.url);
+    if (!photo) return;
+    if (bgMode === "canyon") applyBackground("mine");
+    void showPhoto(photo);
+  });
+}
+
+/// Độ trong suốt của kính, 0–100. 50 là giao diện mặc định (kính mờ 16px, phủ tối
+/// 22%); 100 gần như trong suốt để ngắm nền, 0 đục hẳn để dễ đọc chữ.
+function applyGlass(clarity: number) {
+  const t = Math.min(100, Math.max(0, clarity)) / 100;
+  const alpha = 0.4 - 0.36 * t;
+  const blur = Math.round(30 - 30 * t);
+  const body = document.body.style;
+  body.setProperty("--glass", `rgb(20 10 30 / ${alpha.toFixed(3)})`);
+  body.setProperty("--glass-blur", `blur(${blur}px) saturate(${blur > 0 ? 160 : 110}%)`);
+  $("#glass-value").textContent = `${clarity}%`;
+}
+
+function initGlass() {
+  const saved = Number(readLocal("cloudsave.glass") ?? 50);
+  const start = Number.isFinite(saved) ? saved : 50;
+  applyGlass(start);
+  liquidSlider($("#glass-range"), {
+    min: 0,
+    max: 100,
+    step: 1,
+    value: start,
+    onInput: (v) => {
+      applyGlass(v);
+      writeLocal("cloudsave.glass", String(v));
+    },
+  });
+}
+
+function initBackground() {
+  initGlass();
+  initMyPhotos();
+  applyBackground(readLocal("cloudsave.bg") ?? "canyon");
+  // Ảnh tự thêm nạp sau (cần gọi backend); nạp xong thì chế độ "ảnh của bạn"
+  // mới có ảnh để xoay.
+  void loadMyPhotos().then(() => {
+    if (bgMode === "mine") applyBackground("mine");
+  });
+  $<HTMLSelectElement>("#bg-select").addEventListener("change", (e) =>
+    applyBackground((e.target as HTMLSelectElement).value),
+  );
+}
+
 function wireEvents() {
+  initBackground();
+  initNav();
+  initSteamCloud();
   $("#user-select").addEventListener("change", (e) => {
     void selectUser(Number((e.target as HTMLSelectElement).value));
   });
@@ -134,6 +518,17 @@ async function subscribe() {
     log(`■ ${g.title} đã tắt — đang kiểm tra file save…`, "info"),
   );
   await api.on<GameChecked>("game-checked", (c) => void onGameChecked(c));
+  await api.on<SteamAccount | null>("steam-account", (a) => void onSteamAccount(a));
+  await api.on<SteamCloudStatus>("steam-cloud", onSteamCloud);
+  await api.on<string>("steam-cloud-ui", (msg) => {
+    setStatus(msg, "info");
+    log(msg, "info");
+    if (steamCloud) renderSteamCloud({ ...steamCloud, busy: true });
+  });
+  await api.on<string>("steam-cloud-ui-error", (msg) => {
+    setStatus(`Không tắt được Steam Cloud: ${msg}`, "error");
+    log(`Không tắt được Steam Cloud tự động: ${msg}`, "error");
+  });
   await api.on<ScanProgress>("scan-progress", onScanProgress);
   await api.on<PushProgress>("push-progress", onPushProgress);
 }
@@ -169,6 +564,162 @@ async function onGameChecked(c: GameChecked) {
   }
   await refreshGames();
   if (selectedAppId === c.app_id) await loadDetail();
+}
+
+// ── Tài khoản Steam đang đăng nhập ──────────────────────────────────────
+
+function renderSteamAccount(a: SteamAccount | null) {
+  const chip = $("#steam-chip");
+  if (!a) {
+    chip.hidden = true;
+    return;
+  }
+  chip.hidden = false;
+  const name = a.persona_name || a.account_name || `Tài khoản ${a.account_id}`;
+  chip.className = `acct ${a.logged_in ? "acct--on" : "acct--off"}`;
+  $("#steam-name").textContent = a.logged_in ? name : `Steam đã tắt · ${name}`;
+  const avatar = $("#steam-avatar");
+  avatar.innerHTML = a.avatar
+    ? `<img src="${a.avatar}" alt="" />`
+    : escapeHtml(name.trim().charAt(0).toUpperCase() || "?");
+  chip.title = [
+    a.logged_in ? "Steam đang đăng nhập" : "Steam không chạy — tài khoản dùng gần nhất",
+    `${name}${a.account_name && a.account_name !== name ? ` (${a.account_name})` : ""}`,
+    `ID ${a.account_id}`,
+  ].join("\n");
+}
+
+// ── Steam Cloud ─────────────────────────────────────────────────────────
+
+let steamCloud: SteamCloudStatus | null = null;
+
+function renderSteamCloud(s: SteamCloudStatus) {
+  steamCloud = s;
+  const chip = $<HTMLButtonElement>("#steam-cloud");
+  chip.hidden = s.account_id === null;
+  const state = s.busy ? "busy" : s.state;
+  chip.className = `scloud scloud--${state}`;
+  chip.title = {
+    busy: "Đang đổi Steam Cloud…",
+    unknown: `Không đọc được Steam Cloud${s.error ? `: ${s.error}` : ""}`,
+    on: "Steam Cloud đang BẬT",
+    queued: "Steam Cloud còn bật — sẽ tắt ở lần đăng nhập tới",
+    off: "Steam Cloud đã tắt",
+  }[state];
+
+  $("#scloud-title").textContent = {
+    busy: "Đang đổi Steam Cloud…",
+    unknown: "Không đọc được Steam Cloud",
+    on: "Steam Cloud đang bật",
+    queued: "Steam Cloud sẽ tắt ở lần đăng nhập tới",
+    off: "Steam Cloud đã tắt",
+  }[state];
+  $("#scloud-title").className = `scloud-pop__title scloud-pop__title--${state}`;
+
+  const why = "Steam có thể đồng bộ đè bản save cũ trên cloud của nó lên save CloudSave vừa khôi phục.";
+  const now = s.logged_in
+    ? " Bấm tắt: app mở Settings → Cloud của Steam và gạt công tắc giúp bạn (mượn chuột 1–2 giây, không khởi động lại Steam)."
+    : " Tài khoản này đang không đăng nhập nên tắt xong là có hiệu lực ở lần đăng nhập tới.";
+  $("#scloud-text").textContent = {
+    busy: s.logged_in
+      ? "Đang gạt công tắc trong cửa sổ Settings của Steam — đừng động vào chuột."
+      : "Đang ghi cài đặt…",
+    unknown: s.error ?? "Chưa xác định được tài khoản Steam.",
+    on:
+      why +
+      (s.auto_disable && s.logged_in
+        ? " App đang tự động: sẽ gạt công tắc trong Settings của Steam khi không có game nào chạy."
+        : now),
+    queued:
+      "App đã ghi sẵn cài đặt tắt. Steam chỉ đọc lúc đăng nhập, nên lần đăng nhập tới tài khoản này sẽ tắt Steam Cloud.",
+    off: "CloudSave là nơi giữ save duy nhất, không bị Steam ghi đè.",
+  }[state];
+
+  const btn = $<HTMLButtonElement>("#btn-scloud-toggle");
+  const wantsOff = state === "on" || state === "queued" || state === "busy";
+  btn.hidden = state === "unknown" || (state === "queued" && !s.logged_in);
+  btn.disabled = s.busy || (state === "off" && s.auto_disable);
+  btn.className = wantsOff ? "danger" : "ghost";
+  btn.textContent = !wantsOff ? "Bật lại" : "Tắt Steam Cloud";
+  // Đang đăng nhập thì app không bật lại hộ được (phải gạt trong Steam).
+  if (!wantsOff && s.logged_in) btn.hidden = true;
+  btn.title = state === "off" && s.auto_disable ? "Đang tự động tắt — bỏ chọn bên dưới trước" : "";
+
+  $<HTMLInputElement>("#scloud-auto").checked = s.auto_disable;
+  $<HTMLInputElement>("#setting-scloud-auto").checked = s.auto_disable;
+}
+
+function onSteamCloud(s: SteamCloudStatus) {
+  const prev = steamCloud;
+  renderSteamCloud(s);
+  if (!prev || prev.account_id !== s.account_id || prev.state === s.state) return;
+  if (s.state === "on") log("Steam Cloud đang BẬT — có thể đè save đã khôi phục", "warn");
+  else if (s.state === "queued") log("Đã hẹn tắt Steam Cloud ở lần đăng nhập tới", "info");
+  else if (s.state === "off") log("Steam Cloud đã tắt", "ok");
+}
+
+async function toggleSteamCloud() {
+  if (!steamCloud || steamCloud.state === "unknown") return;
+  const want = steamCloud.state === "off";
+  renderSteamCloud({ ...steamCloud, busy: true });
+  try {
+    renderSteamCloud(await api.setSteamCloud(want));
+    setStatus(want ? "Đã bật lại Steam Cloud" : "Đã tắt Steam Cloud", "ok");
+  } catch (e) {
+    setStatus(`Không đổi được Steam Cloud: ${errorText(e)}`, "error");
+    log(`Không đổi được Steam Cloud: ${errorText(e)}`, "error");
+    renderSteamCloud(await api.steamCloudStatus());
+  }
+}
+
+async function setAutoDisable(on: boolean) {
+  try {
+    renderSteamCloud(await api.setAutoDisableSteamCloud(on));
+  } catch (e) {
+    setStatus(`Không lưu được tuỳ chọn: ${errorText(e)}`, "error");
+  }
+}
+
+function initSteamCloud() {
+  const chip = $("#steam-cloud");
+  const pop = $("#scloud-pop");
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+  });
+  pop.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => (pop.hidden = true));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") pop.hidden = true;
+  });
+  $("#btn-scloud-toggle").addEventListener("click", () => void toggleSteamCloud());
+  for (const id of ["#scloud-auto", "#setting-scloud-auto"]) {
+    $(id).addEventListener("change", (e) => void setAutoDisable((e.target as HTMLInputElement).checked));
+  }
+}
+
+/// Steam vừa đổi tài khoản (hoặc bật / tắt). Nếu là tài khoản khác thì đổi
+/// theo và quét lại — save của mỗi tài khoản nằm ở chỗ khác nhau.
+async function onSteamAccount(a: SteamAccount | null) {
+  renderSteamAccount(a);
+  if (!a || !a.logged_in || a.account_id === accountId) return;
+  const name = a.persona_name || a.account_name || String(a.account_id);
+  log(`Steam đổi sang tài khoản ${name} — quét lại save`, "ok");
+  accountId = a.account_id;
+  selectedAppId = null;
+  if (!users.some((u) => u.account_id === a.account_id)) {
+    users.push({
+      account_id: a.account_id,
+      steam_id64: a.steam_id64,
+      account_name: a.account_name,
+      persona_name: a.persona_name,
+      last_login: Date.now() / 1000,
+    });
+  }
+  renderUsers();
+  renderDetail();
+  await refreshGames();
+  await runScanAll();
 }
 
 // ── Tài khoản Steam ──────────────────────────────────────────────────────
@@ -334,7 +885,7 @@ function renderDetail() {
         <h2>${escapeHtml(g.title)}</h2>
         <p class="sub">appid ${g.app_id} · ${g.running ? `<strong class="live">đang chạy</strong>` : "không chạy"}</p>
       </div>
-      <button id="btn-capture" data-guard ${g.running ? "disabled" : ""}
+      <button id="btn-capture" class="primary" data-guard ${g.running ? "disabled" : ""}
         title="${g.running ? "Game đang chạy — sẽ tự lưu khi tắt" : "Lưu trạng thái save hiện tại vào máy"}">
         Lưu ngay vào máy
       </button>
@@ -371,10 +922,10 @@ function renderDetail() {
             </div>
           </div>
           <div class="snap__actions">
-            <button data-guard data-push="${s.id}" ${!cloudConfigured ? "disabled title='Chưa cấu hình Supabase'" : ""}>
+            <button class="ghost ghost--accent" data-guard data-push="${s.id}" ${!cloudConfigured ? "disabled title='Chưa cấu hình Supabase'" : ""}>
               ${s.remote_id ? "Đẩy lại" : "Đẩy lên cloud"}
             </button>
-            <button data-guard data-restore-local="${s.id}" ${g.running ? "disabled" : ""}>Khôi phục</button>
+            <button class="ghost" data-guard data-restore-local="${s.id}" ${g.running ? "disabled" : ""}>Khôi phục</button>
           </div>
         </div>`,
         )
@@ -392,8 +943,8 @@ function renderDetail() {
               <div class="snap__meta">${r.file_count} file · ${formatBytes(r.total_bytes)} · từ ${escapeHtml(r.device_name ?? r.device_id)}</div>
             </div>
             <div class="snap__actions">
-              <button data-guard data-restore-remote="${r.id}" ${g.running ? "disabled" : ""}>Khôi phục</button>
-              <button data-guard data-delete-remote="${r.id}" class="danger">Xoá</button>
+              <button class="ghost" data-guard data-restore-remote="${r.id}" ${g.running ? "disabled" : ""}>Khôi phục</button>
+              <button class="ghost danger" data-guard data-delete-remote="${r.id}">Xoá</button>
             </div>
           </div>`,
           )
@@ -500,6 +1051,7 @@ async function doPush(id: string, force: boolean) {
     const msg = `Đã đẩy lên cloud: ${parts.join(", ")}.`;
     setStatus(msg, "ok");
     log(`☁ ${msg}`, "ok");
+    await reconcileCloud();
     await refreshGames();
     await loadDetail();
   } catch (e) {
@@ -558,6 +1110,7 @@ async function doDeleteRemote(id: string) {
   try {
     await api.deleteRemote(id);
     log("Đã xoá một bản trên cloud", "info");
+    await reconcileCloud();
     await refreshGames();
     await loadDetail();
   } catch (e) {
@@ -618,6 +1171,7 @@ async function doSignIn() {
     const then = afterLogin;
     closeLogin();
     log(`Đã đăng nhập cloud: ${session.email ?? ""}`, "ok");
+    await reconcileCloud();
     if (selected()) await loadDetail();
     then?.();
   } catch (e) {
@@ -662,6 +1216,18 @@ async function doSignOut() {
   renderCloud();
   renderDetail();
   log("Đã đăng xuất cloud");
+}
+
+/// Gỡ dấu "đã lên cloud" của các bản local mà bản trên cloud đã bị xoá (trong
+/// app, trong Dashboard hay từ máy khác), rồi vẽ lại danh sách.
+async function reconcileCloud() {
+  try {
+    const n = await api.reconcileCloud();
+    if (n > 0) log(`Đã gỡ dấu cloud của ${n} bản không còn trên cloud`, "info");
+  } catch (e) {
+    console.warn("không đối chiếu được cloud:", e);
+  }
+  await refreshGames();
 }
 
 // ── Manifest ─────────────────────────────────────────────────────────────

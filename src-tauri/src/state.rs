@@ -34,6 +34,8 @@ pub struct AppState {
     running: Mutex<BTreeSet<u32>>,
     /// Tài khoản Steam dùng để giải `{64BitSteamID}` và thư mục `userdata/`.
     watch_account: Mutex<Option<u32>>,
+    /// Tự động tắt Steam Cloud / đang tắt dở.
+    pub steam_cloud: crate::steam_cloud::Flags,
 }
 
 impl AppState {
@@ -80,6 +82,11 @@ impl AppState {
             store: Arc::new(store),
             running: Mutex::new(BTreeSet::new()),
             watch_account: Mutex::new(watch_account),
+            steam_cloud: crate::steam_cloud::Flags {
+                auto_disable: crate::steam_cloud::load_auto_disable().into(),
+                busy: false.into(),
+                ui_disabled: Default::default(),
+            },
         }
     }
 

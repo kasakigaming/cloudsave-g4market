@@ -1017,13 +1017,10 @@ async function doCapture() {
 /// Steam dời sạch file của tài khoản khác sang `userdata/<tài khoản đó>/…/ac`
 /// ngay lần quét kế tiếp.
 function logRestoreAccount(r: RestoreReport) {
-  if (r.source_account !== null && r.source_account !== r.target_account) {
-    log(
-      `↔ Bản lưu của tài khoản ${r.source_account} → khôi phục cho tài khoản ` +
-        `${r.target_account} đang đăng nhập` +
-        (r.remapped ? `, đổi đường dẫn ${r.remapped} file` : ""),
-      "warn",
-    );
+  // Câu "bản lưu thuộc tài khoản nào" đã có trong `warnings` từ backend; ở đây
+  // chỉ báo kết quả.
+  if (r.remapped) {
+    log(`↔ Đã chuyển ${r.remapped} file sang thư mục của tài khoản ${r.target_account}`, "ok");
   }
   if (r.markers) log(`✓ Đã báo Steam chỗ save này thuộc tài khoản ${r.target_account}`, "ok");
 }

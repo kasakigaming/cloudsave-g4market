@@ -195,8 +195,10 @@ export interface RestoreReport {
   warnings: string[];
   /// Tài khoản Steam đã nhận bản khôi phục (tài khoản đang đăng nhập).
   target_account: number;
-  /// Tài khoản đã chụp bản lưu, nếu biết.
+  /// Tài khoản đã chụp bản lưu, nếu biết hoặc dò ra được.
   source_account: number | null;
+  /// recorded = bản lưu có ghi; path / path_newest = dò từ đường dẫn; unknown.
+  source_origin: "recorded" | "path" | "path_newest" | "unknown";
   /// Số file phải đổi id tài khoản trong đường dẫn.
   remapped: number;
   /// Số `steam_autocloud.vdf` phải dán lại nhãn cho tài khoản đích.

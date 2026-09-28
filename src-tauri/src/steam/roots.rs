@@ -183,6 +183,23 @@ pub fn steam_id64(account_id: u32) -> u64 {
     STEAMID64_BASE + account_id as u64
 }
 
+/// Account id nếu `seg` đúng là SteamID64 của một tài khoản cá nhân: đủ 17 chữ
+/// số và nằm trong khoảng `BASE + 1 ..= BASE + u32::MAX`. Không nhận số 16/18
+/// chữ số hay số ngoài khoảng, nên tên save kiểu `farm_400000001` không lọt vào.
+pub fn account_from_id64(seg: &str) -> Option<u32> {
+    if seg.len() != 17 || !seg.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let v: u64 = seg.parse().ok()?;
+    let id = u32::try_from(v.checked_sub(STEAMID64_BASE)?).ok()?;
+    (id != 0).then_some(id)
+}
+
+/// Các tài khoản có SteamID64 nằm thành cả một đoạn trong `rel_path`.
+pub fn accounts_in_path(rel_path: &str) -> impl Iterator<Item = u32> + '_ {
+    rel_path.split('/').filter_map(account_from_id64)
+}
+
 /// Đổi id tài khoản nằm trong `rel_path` từ `from` sang `to`.
 ///
 /// Khoảng 19% quy tắc UFS có `{64BitSteamID}` / `{Steam3AccountID}`, và app giải
@@ -191,7 +208,7 @@ pub fn steam_id64(account_id: u32) -> u64 {
 /// giữ nguyên id là ghi vào thư mục game không bao giờ đọc.
 ///
 /// Chỉ đổi **cả đoạn** đường dẫn, không đổi một phần tên: tên save do game tự
-/// sinh cũng chứa số (vd `farm_440093860` của Stardew) và không liên quan gì tới
+/// sinh cũng chứa số (vd `farm_400000001` của Stardew) và không liên quan gì tới
 /// tài khoản Steam.
 pub fn remap_account(rel_path: &str, from: u32, to: u32) -> String {
     if from == to {
@@ -240,6 +257,23 @@ mod tests {
             remap_account("x/save_111111111.sav", 111_111_111, 7),
             "x/save_111111111.sav"
         );
+    }
+
+    #[test]
+    fn recognises_only_real_steam_id64_segments() {
+        assert_eq!(account_from_id64("76561197960287930"), Some(22_202));
+        assert_eq!(
+            accounts_in_path("SB/Saved/SaveGames/76561198071376839/a.sav").collect::<Vec<_>>(),
+            vec![111_111_111]
+        );
+        // Không phải SteamID64: ngắn / dài / lẫn chữ / ngoài khoảng / id 0.
+        assert_eq!(account_from_id64("7656119807137683"), None);
+        assert_eq!(account_from_id64("765611980713768390"), None);
+        assert_eq!(account_from_id64("7656119807137683x"), None);
+        assert_eq!(account_from_id64("99999999999999999"), None);
+        assert_eq!(account_from_id64("76561197960265728"), None);
+        // Nằm lẫn trong tên thì không tính.
+        assert_eq!(accounts_in_path("x/save_76561198071376839.sav").count(), 0);
     }
 
     #[test]

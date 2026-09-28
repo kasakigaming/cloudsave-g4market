@@ -152,7 +152,7 @@ mod tests {
 {
 	"ChangeNumber"		"36"
 	"OSType"		"0"
-	"StardewValley/Saves/123_275230253/123_275230253"
+	"StardewValley/Saves/Farm_100000001/Farm_100000001"
 	{
 		"root"		"4"
 		"size"		"4165569"

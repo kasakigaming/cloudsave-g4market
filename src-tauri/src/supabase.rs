@@ -626,6 +626,20 @@ impl Supabase {
         u32::try_from(id).ok()
     }
 
+    /// Ghi tài khoản Steam cho một snapshot CHƯA có — dùng khi bản đẩy từ app cũ
+    /// được dò ra tài khoản chắc chắn lúc khôi phục. Bộ lọc `is.null` bảo đảm
+    /// không bao giờ ghi đè giá trị đã có.
+    pub async fn set_snapshot_account(&self, snapshot_id: &str, account: u32) -> Result<()> {
+        self.rest(
+            Method::PATCH,
+            &format!("snapshots?id=eq.{snapshot_id}&steam_account_id=is.null"),
+            Some(json!({ "steam_account_id": account })),
+            Some("return=minimal"),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn snapshot_files(&self, snapshot_id: &str) -> Result<Value> {
         self.rest(
             Method::GET,

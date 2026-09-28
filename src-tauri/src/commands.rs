@@ -522,7 +522,7 @@ pub async fn restore_snapshot(
     let source = sb.snapshot_account(&snapshot_id).await;
     let plan = restore_plan(&state, source)?;
     let ctx = context_for(&state, plan.target_account, app_id)?;
-    restore::run_remote(
+    let report = restore::run_remote(
         sb,
         &snapshot_id,
         &ctx,
@@ -532,7 +532,16 @@ pub async fn restore_snapshot(
             let _ = app.emit("restore-progress", &p);
         },
     )
-    .await
+    .await?;
+    // Bản đẩy từ app cũ mà dò ra tài khoản chắc chắn (đúng một SteamID64 trong
+    // đường dẫn): ghi lại lên cloud cho lần sau khỏi phải dò. Hỏng thì thôi —
+    // schema chưa có cột, hay mất mạng giữa chừng, đều không ảnh hưởng save.
+    if let (restore::SourceOrigin::Path, Some(acc)) = (report.source_origin, report.source_account) {
+        if let Err(e) = sb.set_snapshot_account(&snapshot_id, acc).await {
+            log::warn!("không ghi được tài khoản Steam cho snapshot {snapshot_id}: {e}");
+        }
+    }
+    Ok(report)
 }
 
 #[tauri::command]

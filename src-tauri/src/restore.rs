@@ -59,8 +59,10 @@ pub struct RestoreReport {
     pub warnings: Vec<String>,
     /// Tài khoản Steam đã nhận bản khôi phục này.
     pub target_account: u32,
-    /// Tài khoản đã chụp bản lưu, nếu biết.
+    /// Tài khoản đã chụp bản lưu, nếu biết hoặc dò ra được.
     pub source_account: Option<u32>,
+    /// `source_account` lấy từ đâu.
+    pub source_origin: SourceOrigin,
     /// Số file phải đổi id tài khoản trong đường dẫn.
     pub remapped: usize,
     /// Số `steam_autocloud.vdf` phải dán lại nhãn sang tài khoản đích.
@@ -75,17 +77,115 @@ pub struct Plan {
     /// Tài khoản Steam đang đăng nhập trên máy này — đích của lần khôi phục.
     pub target_account: u32,
     /// Tài khoản đã chụp bản lưu. `None` với snapshot cloud đẩy lên từ bản app
-    /// cũ (chưa ghi tài khoản): khi đó không đổi được id trong đường dẫn.
+    /// cũ (chưa ghi tài khoản): khi đó app dò từ đường dẫn, xem `decide_remap`.
     pub source_account: Option<u32>,
 }
 
-impl Plan {
-    /// Cùng một tài khoản: đường dẫn giữ nguyên, không cần cảnh báo gì.
-    fn same_account(&self) -> bool {
-        match self.source_account {
-            Some(src) => src == self.target_account,
-            None => true,
+/// Tài khoản nguồn lấy từ đâu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceOrigin {
+    /// Bản lưu có ghi tài khoản đã chụp.
+    Recorded,
+    /// Không ghi, nhưng đường dẫn có đúng một SteamID64 — chắc chắn là nó.
+    Path,
+    /// Không ghi, đường dẫn có nhiều SteamID64: lấy thư mục có file mới nhất,
+    /// tức tài khoản chơi gần nhất lúc chụp.
+    PathNewest,
+    /// Không biết — và đường dẫn cũng không có id tài khoản nào để đổi.
+    Unknown,
+}
+
+/// Kết quả của `decide_remap`.
+#[derive(Debug)]
+struct Remap {
+    /// Đổi id của tài khoản này sang tài khoản đích; `None` = giữ nguyên.
+    from: Option<u32>,
+    source: Option<u32>,
+    origin: SourceOrigin,
+    warnings: Vec<String>,
+}
+
+/// Quyết định đổi id tài khoản nào trong đường dẫn, dựa vào tài khoản Steam
+/// đang đăng nhập (`plan.target_account`).
+///
+/// Quy tắc, theo thứ tự:
+///
+/// 1. Bản lưu **đã có sẵn thư mục của tài khoản đích** (SteamID64 hay Steam3 id
+///    của nó nằm trong đường dẫn): không đổi gì. Đổi thì thư mục của tài khoản
+///    nguồn đổ vào đúng chỗ thư mục của tài khoản đích — hai bộ save đè nhau.
+///    Chuyện này có thật: một game chơi bằng hai tài khoản trên cùng máy thì
+///    bản chụp chứa cả hai thư mục.
+/// 2. Có ghi tài khoản đã chụp → đổi id của tài khoản đó.
+/// 3. Không ghi (bản đẩy từ app cũ) → dò SteamID64 trong đường dẫn. Một id:
+///    chính nó. Nhiều id: thư mục có file mới nhất. Chỉ đổi đúng một tài khoản,
+///    các thư mục còn lại giữ nguyên, nên không bao giờ hai thư mục gộp làm một.
+///
+/// Steam3 id (số 32-bit trần) không dò bằng hình dạng được — dễ nhầm với số do
+/// game tự sinh — nên chỉ đổi khi đã biết tài khoản nguồn.
+fn decide_remap(entries: &[Entry], plan: Plan) -> Remap {
+    use std::collections::BTreeMap;
+
+    let target = plan.target_account;
+    let target32 = target.to_string();
+    // Mỗi tài khoản trong đường dẫn → (mtime mới nhất, số file).
+    let mut seen: BTreeMap<u32, (Option<DateTime<Utc>>, usize)> = BTreeMap::new();
+    let mut target_present = false;
+    for e in entries.iter().filter(|e| !autocloud::is_marker(&e.rel_path)) {
+        for acc in roots::accounts_in_path(&e.rel_path) {
+            let slot = seen.entry(acc).or_insert((None, 0));
+            slot.0 = slot.0.max(e.mtime);
+            slot.1 += 1;
         }
+        target_present |= e.rel_path.split('/').any(|seg| seg == target32);
+    }
+    target_present |= seen.contains_key(&target);
+
+    let (source, origin) = match plan.source_account {
+        Some(a) => (Some(a), SourceOrigin::Recorded),
+        None => match seen.len() {
+            0 => (None, SourceOrigin::Unknown),
+            1 => (seen.keys().next().copied(), SourceOrigin::Path),
+            _ => (
+                seen.iter()
+                    .max_by_key(|(_, (t, n))| (*t, *n))
+                    .map(|(a, _)| *a),
+                SourceOrigin::PathNewest,
+            ),
+        },
+    };
+
+    let mut warnings = Vec::new();
+    let from = match source {
+        Some(s) if s != target && target_present => {
+            warnings.push(format!(
+                "bản lưu có sẵn thư mục của tài khoản {target} đang đăng nhập — \
+                 khôi phục nguyên đường dẫn, không đổi thư mục nào"
+            ));
+            None
+        }
+        Some(s) if s != target => {
+            let how = match origin {
+                SourceOrigin::Path => " (dò từ đường dẫn)".to_string(),
+                SourceOrigin::PathNewest => format!(
+                    " (đường dẫn có {} tài khoản, chọn thư mục có file mới nhất)",
+                    seen.len()
+                ),
+                _ => String::new(),
+            };
+            warnings.push(format!(
+                "bản lưu thuộc tài khoản Steam {s}{how}, khôi phục cho tài khoản \
+                 {target} đang đăng nhập"
+            ));
+            Some(s)
+        }
+        _ => None,
+    };
+    Remap {
+        from,
+        source,
+        origin,
+        warnings,
     }
 }
 
@@ -127,7 +227,7 @@ where
         })
         .collect();
 
-    let mut ap = Applier::new(ctx, plan, safety_root, &snap.id);
+    let mut ap = Applier::new(ctx, plan, &entries, safety_root, &snap.id);
     on_progress(Progress::Started {
         total_files: entries.len(),
     });
@@ -171,7 +271,7 @@ where
         ));
     }
 
-    let mut ap = Applier::new(ctx, plan, safety_root, snapshot_id);
+    let mut ap = Applier::new(ctx, plan, &entries, safety_root, snapshot_id);
     // Nhiều file chung tổ tiên delta thì mỗi tổ tiên chỉ tải một lần.
     let mut cache = remote_blob::Cache::default();
     on_progress(Progress::Started {
@@ -204,6 +304,7 @@ where
 struct Applier<'a> {
     ctx: &'a RootContext,
     plan: Plan,
+    remap: Remap,
     /// Tạo theo thời điểm, để hai lần khôi phục liên tiếp không đè lên bản
     /// cứu hộ của nhau.
     safety_dir: PathBuf,
@@ -227,21 +328,22 @@ struct Target {
 }
 
 impl<'a> Applier<'a> {
-    fn new(ctx: &'a RootContext, plan: Plan, safety_root: &Path, source_id: &str) -> Self {
+    fn new(
+        ctx: &'a RootContext,
+        plan: Plan,
+        entries: &[Entry],
+        safety_root: &Path,
+        source_id: &str,
+    ) -> Self {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         // Id local chứa '@' — hợp lệ trên Windows nhưng thay cho dễ đọc.
         let tag = source_id.replace('@', "_");
-        let mut warnings = Vec::new();
-        if let (Some(src), false) = (plan.source_account, plan.same_account()) {
-            warnings.push(format!(
-                "bản lưu thuộc tài khoản Steam {src}, đang khôi phục cho tài khoản \
-                 {} đang đăng nhập",
-                plan.target_account
-            ));
-        }
+        let mut remap = decide_remap(entries, plan);
+        let warnings = std::mem::take(&mut remap.warnings);
         Self {
             ctx,
             plan,
+            remap,
             safety_dir: safety_root.join(format!("{tag}-{stamp}")),
             safety_used: false,
             restored: 0,
@@ -255,7 +357,7 @@ impl<'a> Applier<'a> {
 
     /// Đường dẫn tương đối đã đổi id tài khoản sang tài khoản đích.
     fn rel_for(&mut self, rel_path: &str) -> String {
-        let Some(src) = self.plan.source_account else {
+        let Some(src) = self.remap.from else {
             return rel_path.to_string();
         };
         let out = roots::remap_account(rel_path, src, self.plan.target_account);
@@ -386,7 +488,8 @@ impl<'a> Applier<'a> {
             safety_dir: safety,
             warnings: self.warnings,
             target_account: self.plan.target_account,
-            source_account: self.plan.source_account,
+            source_account: self.remap.source,
+            source_origin: self.remap.origin,
             remapped: self.remapped,
             markers: self.retagged,
         }

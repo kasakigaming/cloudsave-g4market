@@ -191,3 +191,153 @@ fn same_account_restore_changes_nothing_about_paths() {
     assert_eq!(r.markers, 0, "file đánh dấu đã đúng tài khoản, không ghi lại");
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Bản đẩy từ app cũ: không ghi tài khoản đã chụp, app phải tự dò.
+// ─────────────────────────────────────────────────────────────────────────
+
+const ACC_X: u32 = 333_333_333;
+
+/// Dựng một bản lưu gồm các file `(rel_path, nội dung, mtime giây)` dưới
+/// root `GameInstall`, chụp vào kho rồi xoá sạch thư mục save.
+fn snapshot_of(
+    game: &Path,
+    store: &LocalStore,
+    slug: &str,
+    account: u32,
+    files: &[(&str, &[u8], i64)],
+) -> cloudsave_lib::local_store::LocalSnapshot {
+    let mut list = Vec::new();
+    for (rel, bytes, secs) in files {
+        let abs = game.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        write(&abs, bytes);
+        let mut f = save_file(RootToken::GameInstall, rel, &abs);
+        f.mtime = chrono::DateTime::from_timestamp(*secs, 0);
+        list.push(f);
+    }
+    let scan = GameScan {
+        app_id: Some(APP),
+        slug: slug.into(),
+        title: slug.into(),
+        files: list,
+        total_bytes: 0,
+        sources: vec![Source::Ufs],
+        warnings: Vec::new(),
+    };
+    let CaptureOutcome::Created { snapshot } = store.capture(&scan, account, Trigger::Manual).unwrap()
+    else {
+        panic!("phải tạo được snapshot");
+    };
+    std::fs::remove_dir_all(game.join("SaveGames")).unwrap();
+    snapshot
+}
+
+fn ctx_for(home: &Path, game: &Path, account: u32) -> RootContext {
+    RootContext {
+        steam_root: home.join("steam"),
+        account_id: account,
+        app_id: APP,
+        game_install: Some(game.to_path_buf()),
+    }
+}
+
+fn dir_of(account: u32) -> String {
+    roots::steam_id64(account).to_string()
+}
+
+#[test]
+fn old_cloud_snapshot_with_one_id_goes_to_logged_in_account() {
+    let (home, store_dir, safety) = (tmp("g1"), tmp("s1"), tmp("x1"));
+    let game = home.0.join("install");
+    let store = LocalStore::open(&store_dir.0).unwrap();
+    let rel = format!("SaveGames/{}/slot0.sav", dir_of(ACC_A));
+    let snap = snapshot_of(&game, &store, "one-id", ACC_A, &[(&rel, b"save A", 1_000)]);
+
+    // Như bản đẩy từ app cũ: không biết tài khoản nguồn.
+    let plan = restore::Plan {
+        target_account: ACC_B,
+        source_account: None,
+    };
+    let r = restore::run_local(&store, &snap, &ctx_for(&home.0, &game, ACC_B), plan, &safety.0, |_| {})
+        .unwrap();
+
+    // Thư mục của B chưa có → được tạo ra và nhận save.
+    let want = game.join("SaveGames").join(dir_of(ACC_B)).join("slot0.sav");
+    assert_eq!(std::fs::read(&want).unwrap(), b"save A");
+    assert!(!game.join("SaveGames").join(dir_of(ACC_A)).exists());
+    assert_eq!(r.source_account, Some(ACC_A));
+    assert_eq!(r.source_origin, restore::SourceOrigin::Path);
+    assert_eq!(r.remapped, 1);
+}
+
+#[test]
+fn several_ids_pick_the_newest_folder_and_never_merge_two() {
+    let (home, store_dir, safety) = (tmp("g2"), tmp("s2"), tmp("x2"));
+    let game = home.0.join("install");
+    let store = LocalStore::open(&store_dir.0).unwrap();
+    let rel_a = format!("SaveGames/{}/slot0.sav", dir_of(ACC_A));
+    let rel_x = format!("SaveGames/{}/slot0.sav", dir_of(ACC_X));
+    // X chơi gần hơn (mtime lớn hơn) → X là tài khoản cần chuyển sang B.
+    let snap = snapshot_of(
+        &game,
+        &store,
+        "two-ids",
+        ACC_A,
+        &[(&rel_a, b"save A", 1_000), (&rel_x, b"save X", 9_000)],
+    );
+
+    let plan = restore::Plan {
+        target_account: ACC_B,
+        source_account: None,
+    };
+    let r = restore::run_local(&store, &snap, &ctx_for(&home.0, &game, ACC_B), plan, &safety.0, |_| {})
+        .unwrap();
+
+    let saves = game.join("SaveGames");
+    assert_eq!(std::fs::read(saves.join(dir_of(ACC_B)).join("slot0.sav")).unwrap(), b"save X");
+    // Thư mục của A giữ nguyên, không bị gộp vào thư mục của B.
+    assert_eq!(std::fs::read(saves.join(dir_of(ACC_A)).join("slot0.sav")).unwrap(), b"save A");
+    assert_eq!(r.source_account, Some(ACC_X));
+    assert_eq!(r.source_origin, restore::SourceOrigin::PathNewest);
+    assert_eq!(r.remapped, 1, "chỉ đổi đúng một thư mục");
+}
+
+#[test]
+fn snapshot_already_holding_target_folder_is_restored_as_is() {
+    // Lỗi của bản 0.1.2: bản do A chụp có cả thư mục của B (hai tài khoản chơi
+    // chung máy). Khôi phục cho B mà đổi A → B thì hai thư mục đè lên nhau.
+    let (home, store_dir, safety) = (tmp("g3"), tmp("s3"), tmp("x3"));
+    let game = home.0.join("install");
+    let store = LocalStore::open(&store_dir.0).unwrap();
+    let rel_a = format!("SaveGames/{}/slot0.sav", dir_of(ACC_A));
+    let rel_b = format!("SaveGames/{}/slot0.sav", dir_of(ACC_B));
+    let snap = snapshot_of(
+        &game,
+        &store,
+        "holds-target",
+        ACC_A,
+        &[(&rel_a, b"save A", 9_000), (&rel_b, b"save B", 1_000)],
+    );
+
+    for source in [Some(ACC_A), None] {
+        let plan = restore::Plan {
+            target_account: ACC_B,
+            source_account: source,
+        };
+        let r = restore::run_local(&store, &snap, &ctx_for(&home.0, &game, ACC_B), plan, &safety.0, |_| {})
+            .unwrap();
+        let saves = game.join("SaveGames");
+        assert_eq!(
+            std::fs::read(saves.join(dir_of(ACC_B)).join("slot0.sav")).unwrap(),
+            b"save B",
+            "save của B phải là save của B (source = {source:?})"
+        );
+        assert_eq!(std::fs::read(saves.join(dir_of(ACC_A)).join("slot0.sav")).unwrap(), b"save A");
+        assert_eq!(r.remapped, 0, "source = {source:?}");
+        assert!(
+            r.warnings.iter().any(|w| w.contains("có sẵn thư mục")),
+            "{:?}",
+            r.warnings
+        );
+    }
+}

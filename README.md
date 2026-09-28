@@ -90,9 +90,19 @@ AutoCloud restoring files from ...\userdata\111111111\413150\ac
 Quét cũng bỏ qua `steam_autocloud.vdf`: nó là sổ sách của Steam, không phải dữ
 liệu chơi.
 
-Bản đẩy lên cloud từ đây có kèm `steam_account_id` để khôi phục sang máy khác
-đổi được đường dẫn. Bản đẩy từ app cũ không có, khi đó app khôi phục nguyên si
-và ghi cảnh báo.
+Đổi id nào thì quyết định dựa vào tài khoản đang đăng nhập (`decide_remap` trong
+`restore.rs`):
+
+- **Bản lưu đã có sẵn thư mục của tài khoản đang đăng nhập** thì không đổi gì.
+  Một game chơi bằng hai tài khoản trên cùng máy thì bản chụp chứa cả hai thư
+  mục; đổi thư mục kia sang tài khoản đang đăng nhập là hai bộ save đè nhau.
+- Bản đẩy lên cloud có kèm `steam_account_id` → đổi id của tài khoản đó.
+- Bản đẩy từ app cũ (không có) → dò SteamID64 trong đường dẫn: có một id thì
+  chính nó, có nhiều id thì lấy thư mục có file mới nhất. Chỉ đổi đúng một thư
+  mục, thư mục của tài khoản đích chưa có thì tạo mới. Dò ra chắc chắn (một id)
+  thì ghi `steam_account_id` ngược lên cloud cho lần sau.
+- Steam3 id (số 32-bit trần) chỉ đổi khi biết tài khoản nguồn — dò bằng hình
+  dạng thì dễ nhầm với số do game tự sinh.
 
 ## Ý tưởng
 

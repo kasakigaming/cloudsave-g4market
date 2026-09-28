@@ -195,7 +195,7 @@ mod tests {
 "413150"
 {
 	"ChangeNumber"		"36"
-	"StardewValley/Saves/123_275230253/123_275230253"
+	"StardewValley/Saves/Farm_100000001/Farm_100000001"
 	{
 		"root"		"4"
 		"size"		"4165569"
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(app, "413150");
         assert_eq!(body.str("ChangeNumber"), Some("36"));
         let f = body
-            .obj("StardewValley/Saves/123_275230253/123_275230253")
+            .obj("StardewValley/Saves/Farm_100000001/Farm_100000001")
             .unwrap();
         assert_eq!(f.str("root"), Some("4"));
         assert_eq!(f.str("size"), Some("4165569"));

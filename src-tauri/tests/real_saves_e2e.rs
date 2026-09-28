@@ -27,6 +27,14 @@ use cloudsave_lib::scan::{GameScan, Scanner};
 use cloudsave_lib::steam::{AppInfo, RootContext, SteamInstall};
 use cloudsave_lib::supabase::{Config, Supabase};
 
+/// Khôi phục cho chính tài khoản đã chụp — đúng với mọi test ở đây.
+fn plan(account: u32) -> restore::Plan {
+    restore::Plan {
+        target_account: account,
+        source_account: Some(account),
+    }
+}
+
 fn load_dotenv() {
     for p in ["../.env", ".env"] {
         let Ok(text) = std::fs::read_to_string(p) else {
@@ -281,7 +289,7 @@ async fn every_real_save_survives_delete_and_cloud_restore() {
             app_id: c.app_id,
             game_install: c.install.clone(),
         };
-        let rr = restore::run_remote(&sb, rid, &ctx, &safety_root, |_| {})
+        let rr = restore::run_remote(&sb, rid, &ctx, plan(c.account_id), &safety_root, |_| {})
             .await
             .unwrap_or_else(|e| panic!("khôi phục {} thất bại: {e}", c.scan.title));
         for f in &c.scan.files {

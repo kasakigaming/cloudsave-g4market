@@ -279,6 +279,9 @@ where
             "game_slug":   snap.game_slug,
             "game_title":  snap.game_title,
             "steam_appid": snap.steam_appid,
+            // Cần lúc khôi phục: đường dẫn save của ~19% game có id tài khoản
+            // bên trong, phải đổi sang tài khoản đang đăng nhập.
+            "steam_account_id": snap.account_id,
             "device_id":   device.id,
             "device_name": device.name,
             "parent_id":   parent_id,

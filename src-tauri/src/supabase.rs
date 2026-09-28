@@ -484,15 +484,35 @@ impl Supabase {
         Ok(v.as_array().and_then(|a| a.first()).cloned())
     }
 
+    /// Chèn một snapshot. Cột nào schema chưa có thì bỏ ra rồi thử lại: project
+    /// dựng bằng migration cũ vẫn đẩy lên được, chỉ mất tính năng cần cột đó.
     pub async fn insert_snapshot(&self, row: Value) -> Result<String> {
-        let v = self
+        let mut row = row;
+        let mut v = self
             .rest(
                 Method::POST,
                 "snapshots",
                 Some(json!([row])),
                 Some("return=representation"),
             )
-            .await?;
+            .await;
+        if let Err(e) = &v {
+            if let Some(col) = unknown_column(e, &row) {
+                log::warn!("schema cloud chưa có cột '{col}', đẩy lên không kèm cột này");
+                if let Some(o) = row.as_object_mut() {
+                    o.remove(&col);
+                }
+                v = self
+                    .rest(
+                        Method::POST,
+                        "snapshots",
+                        Some(json!([row])),
+                        Some("return=representation"),
+                    )
+                    .await;
+            }
+        }
+        let v = v?;
         v.as_array()
             .and_then(|a| a.first())
             .and_then(|r| r.get("id"))
@@ -584,6 +604,28 @@ impl Supabase {
         ))
     }
 
+    /// Tài khoản Steam đã chụp snapshot này. `None` khi cột chưa có trong
+    /// schema (project dựng bằng bản migration cũ) hay khi snapshot do app cũ
+    /// đẩy lên — cả hai đều không phải lỗi, chỉ là không đổi được id tài khoản
+    /// trong đường dẫn.
+    pub async fn snapshot_account(&self, snapshot_id: &str) -> Option<u32> {
+        let v = self
+            .rest(
+                Method::GET,
+                &format!("snapshots?select=steam_account_id&id=eq.{snapshot_id}"),
+                None,
+                None,
+            )
+            .await
+            .ok()?;
+        let id = v
+            .as_array()?
+            .first()?
+            .get("steam_account_id")?
+            .as_u64()?;
+        u32::try_from(id).ok()
+    }
+
     pub async fn snapshot_files(&self, snapshot_id: &str) -> Result<Value> {
         self.rest(
             Method::GET,
@@ -604,6 +646,26 @@ impl Supabase {
     }
 }
 
+/// Tên cột mà PostgREST báo là không có, nếu lỗi đúng là như vậy và cột đó thật
+/// sự nằm trong row ta vừa gửi. Không đoán mò: chỉ khớp tên có trong row.
+fn unknown_column(err: &Error, row: &Value) -> Option<String> {
+    let Error::Supabase { status, body } = err else {
+        return None;
+    };
+    // PGRST204 (column not found) trả 400; Postgres 42703 trả 400 hoặc 404.
+    if *status != 400 && *status != 404 {
+        return None;
+    }
+    let keys = row.as_object()?.keys();
+    let body = body.to_ascii_lowercase();
+    if !body.contains("column") && !body.contains("pgrst204") {
+        return None;
+    }
+    keys.map(String::as_str)
+        .find(|k| body.contains(&format!("'{}'", k.to_ascii_lowercase())))
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,6 +676,23 @@ mod tests {
             "eyJhbGciOiJIUzI1NiJ9.{}.c2ln",
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
         )
+    }
+
+    #[test]
+    fn spots_missing_column_only_for_columns_we_sent() {
+        let row = json!({"game_slug": "x", "steam_account_id": 7});
+        let err = Error::Supabase {
+            status: 400,
+            body: r#"{"code":"PGRST204","message":"Could not find the 'steam_account_id' column of 'snapshots' in the schema cache"}"#.into(),
+        };
+        assert_eq!(unknown_column(&err, &row).as_deref(), Some("steam_account_id"));
+
+        // Lỗi khác (vd vi phạm check rel_path) không được coi là thiếu cột.
+        let other = Error::Supabase {
+            status: 400,
+            body: r#"{"code":"23514","message":"violates check constraint \"rel_path_safe\""}"#.into(),
+        };
+        assert_eq!(unknown_column(&other, &row), None);
     }
 
     #[test]

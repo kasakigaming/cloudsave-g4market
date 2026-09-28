@@ -381,13 +381,39 @@ pub async fn restore_local(
         .ok_or_else(|| Error::Other("bản lưu này không gắn với appid Steam nào".into()))?;
     refuse_if_running(&state, app_id)?;
 
-    let ctx = context_for(&state, snap.account_id, app_id)?;
+    // Đích là tài khoản ĐANG ĐĂNG NHẬP, không phải tài khoản đã chụp: Steam
+    // dọn sạch chỗ save nếu file mang nhãn tài khoản khác (xem steam::autocloud).
+    let plan = restore_plan(&state, Some(snap.account_id))?;
+    let ctx = context_for(&state, plan.target_account, app_id)?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        restore::run_local(&store, &snap, &ctx, &restore::default_safety_root(), |_| {})
+        restore::run_local(
+            &store,
+            &snap,
+            &ctx,
+            plan,
+            &restore::default_safety_root(),
+            |_| {},
+        )
     })
     .await
     .map_err(|e| Error::Other(e.to_string()))?
+}
+
+/// Khôi phục cho tài khoản Steam nào.
+///
+/// Ưu tiên tài khoản Steam đang đăng nhập thật (registry `ActiveUser`). Steam
+/// tắt thì dùng tài khoản app đang theo dõi — đó cũng là tài khoản sẽ đăng nhập
+/// lần tới trong đại đa số trường hợp. Không có cái nào thì dừng, vì đoán sai
+/// tài khoản nghĩa là Steam dời save đi ngay lần quét kế tiếp.
+fn restore_plan(state: &AppState, source_account: Option<u32>) -> Result<restore::Plan> {
+    let target = crate::steam::locate::active_user_now()
+        .or_else(|| state.watch_account())
+        .ok_or_else(crate::steam::autocloud::no_account)?;
+    Ok(restore::Plan {
+        target_account: target,
+        source_account,
+    })
 }
 
 fn refuse_if_running(state: &AppState, app_id: u32) -> Result<()> {
@@ -490,14 +516,17 @@ pub async fn restore_snapshot(
     app_id: u32,
 ) -> Result<RestoreReport> {
     refuse_if_running(&state, app_id)?;
-    let account = state
-        .watch_account()
-        .ok_or_else(|| Error::Other("chưa chọn tài khoản Steam".into()))?;
-    let ctx = context_for(&state, account, app_id)?;
+    let sb = state.sb()?;
+    // Tài khoản đã chụp bản này, để đổi id tài khoản nằm trong đường dẫn. Bản
+    // đẩy lên từ app cũ không có thông tin đó — khi đó chỉ khôi phục nguyên si.
+    let source = sb.snapshot_account(&snapshot_id).await;
+    let plan = restore_plan(&state, source)?;
+    let ctx = context_for(&state, plan.target_account, app_id)?;
     restore::run_remote(
-        state.sb()?,
+        sb,
         &snapshot_id,
         &ctx,
+        plan,
         &restore::default_safety_root(),
         |p| {
             let _ = app.emit("restore-progress", &p);

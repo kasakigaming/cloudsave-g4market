@@ -175,3 +175,82 @@ fn known_folder(_reg_name: &str, env_fallback: &str) -> Option<PathBuf> {
     }
     std::env::var_os(env_fallback).map(PathBuf::from)
 }
+
+/// Offset chuyển account id 32-bit sang SteamID64.
+const STEAMID64_BASE: u64 = 76_561_197_960_265_728;
+
+pub fn steam_id64(account_id: u32) -> u64 {
+    STEAMID64_BASE + account_id as u64
+}
+
+/// Đổi id tài khoản nằm trong `rel_path` từ `from` sang `to`.
+///
+/// Khoảng 19% quy tắc UFS có `{64BitSteamID}` / `{Steam3AccountID}`, và app giải
+/// placeholder ngay lúc quét — nên `rel_path` mang sẵn id của tài khoản đã chụp,
+/// vd `SB/Saved/SaveGames/76561198071376839/…`. Khôi phục cho tài khoản khác mà
+/// giữ nguyên id là ghi vào thư mục game không bao giờ đọc.
+///
+/// Chỉ đổi **cả đoạn** đường dẫn, không đổi một phần tên: tên save do game tự
+/// sinh cũng chứa số (vd `farm_440093860` của Stardew) và không liên quan gì tới
+/// tài khoản Steam.
+pub fn remap_account(rel_path: &str, from: u32, to: u32) -> String {
+    if from == to {
+        return rel_path.to_string();
+    }
+    let (from64, to64) = (steam_id64(from).to_string(), steam_id64(to).to_string());
+    let (from32, to32) = (from.to_string(), to.to_string());
+    rel_path
+        .split('/')
+        .map(|seg| {
+            if seg == from64 {
+                to64.as_str()
+            } else if seg == from32 {
+                to32.as_str()
+            } else {
+                seg
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swaps_whole_segments_only() {
+        // Stellar Blade: thư mục theo SteamID64.
+        assert_eq!(
+            remap_account("SB/Saved/SaveGames/76561198071376839/save.sav", 111_111_111, 222_222_222),
+            "SB/Saved/SaveGames/76561198182487950/save.sav"
+        );
+        // Steam3 account id.
+        assert_eq!(
+            remap_account("Saves/111111111/a", 111_111_111, 7),
+            "Saves/7/a"
+        );
+        // Tên save do game sinh, chứa số nhưng không phải id tài khoản.
+        assert_eq!(
+            remap_account("StardewValley/Saves/farm_400000001/farm_400000001", 111_111_111, 7),
+            "StardewValley/Saves/farm_400000001/farm_400000001"
+        );
+        // Id nằm lẫn trong tên file thì không đụng tới.
+        assert_eq!(
+            remap_account("x/save_111111111.sav", 111_111_111, 7),
+            "x/save_111111111.sav"
+        );
+    }
+
+    #[test]
+    fn same_account_is_untouched() {
+        let p = "SB/Saved/SaveGames/76561198071376839/save.sav";
+        assert_eq!(remap_account(p, 5, 5), p);
+    }
+
+    #[test]
+    fn steam_id64_matches_known_pair() {
+        // Cặp công khai, kiểm chứng được: account id 22202 (gabelogannewell).
+        assert_eq!(steam_id64(22_202), 76_561_197_960_287_930);
+    }
+}

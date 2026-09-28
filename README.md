@@ -48,6 +48,52 @@ Cloud" (Cài đặt) thì:
 
 Thử riêng phần OCR, không bấm gì: `cargo run --example steam_cloud_ui`.
 
+### Khôi phục cho tài khoản Steam đang đăng nhập
+
+Steam đặt ở gốc mỗi thư mục save một file `steam_autocloud.vdf` ghi tài khoản
+nào đang sở hữu chỗ đó:
+
+```
+"steam_autocloud.vdf"
+{
+    "accountid"        "111111111"
+}
+```
+
+Tài khoản khác đăng nhập là AutoCloud **dời** (move, không phải copy) toàn bộ
+file khớp quy tắc UFS sang `userdata/<accountid cũ>/<appid>/ac`, rồi kéo bản của
+tài khoản mới từ `ac` của chính nó về. Log của Steam trên máy phát triển:
+
+```
+AutoCloud found files for previous user 333333333 in root ...\StardewValley\Saves
+AutoCloud saved (move) ...\Saves\farm_400000001\farm_400000001
+  to ...\userdata\333333333\413150\ac\WinAppDataRoaming\StardewValley\Saves\...
+AutoCloud restoring files from ...\userdata\111111111\413150\ac
+```
+
+Đây là lý do "khôi phục xong Steam xoá mất save": file không mất, nó nằm trong
+`ac` của tài khoản cũ. Ba việc app làm để khỏi dính (`steam/autocloud.rs`):
+
+1. **Đích là tài khoản đang đăng nhập**, đọc từ registry `ActiveUser`, chứ không
+   phải tài khoản đã chụp bản lưu. Steam tắt thì dùng tài khoản đăng nhập gần
+   nhất; không biết tài khoản nào thì dừng, không đoán.
+2. **Đổi id tài khoản nằm trong đường dẫn.** Khoảng 19% quy tắc UFS có
+   `{64BitSteamID}` / `{Steam3AccountID}`, app giải placeholder ngay lúc quét nên
+   `rel_path` mang sẵn id của tài khoản đã chụp (vd
+   `SB/Saved/SaveGames/76561198071376839/…`). Chỉ đổi **cả đoạn** đường dẫn: tên
+   save do game tự sinh cũng chứa số (`farm_400000001` của Stardew) và không liên
+   quan tới tài khoản.
+3. **Dán lại nhãn `steam_autocloud.vdf`** sang tài khoản đích. App không tạo file
+   này ở chỗ Steam chưa từng đặt, và cũng không bao giờ khôi phục lại nội dung cũ
+   của nó — ghi đè nhãn tài khoản cũ lên chỗ save là tự bắn vào chân.
+
+Quét cũng bỏ qua `steam_autocloud.vdf`: nó là sổ sách của Steam, không phải dữ
+liệu chơi.
+
+Bản đẩy lên cloud từ đây có kèm `steam_account_id` để khôi phục sang máy khác
+đổi được đường dẫn. Bản đẩy từ app cũ không có, khi đó app khôi phục nguyên si
+và ghi cảnh báo.
+
 ## Ý tưởng
 
 Bốn quyết định thiết kế, và lý do đằng sau mỗi cái.
@@ -242,6 +288,7 @@ src-tauri/src/
 │  ├─ remotecache.rs  parser text VDF + kiểm tra path traversal
 │  ├─ locate.rs       dò Steam root, thư viện, tài khoản
 │  ├─ cloudcfg.rs     đọc / sửa công tắc CloudEnabled trong sharedconfig.vdf
+│  ├─ autocloud.rs    steam_autocloud.vdf + thư mục `ac` (Steam dời save đi đâu)
 │  ├─ roots.rs        root token → đường dẫn tuyệt đối
 │  └─ textvdf.rs      parser KeyValues dạng text
 ├─ manifest/ludusavi.rs   tải + cache manifest, map placeholder → root token

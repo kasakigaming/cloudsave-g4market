@@ -8,6 +8,13 @@
 //!   3. Nội dung phải khớp SHA-256 trước khi chạm tới đĩa.
 //!   4. File hiện có được cất vào thư mục cứu hộ trước, rồi mới ghi đè bằng
 //!      tmp-then-rename để không bao giờ để lại file ghi dở.
+//!
+//! Và một lớp nữa, không phải để chống app ghi sai mà để chống Steam dọn mất
+//! những gì app vừa ghi (xem `steam::autocloud`): mọi đường dẫn được dựng theo
+//! **tài khoản Steam đang đăng nhập**, id tài khoản nằm trong đường dẫn được
+//! đổi sang tài khoản đó, và `steam_autocloud.vdf` được dán lại nhãn. Không có
+//! ba việc này thì khôi phục bản của tài khoản khác xong, lần quét kế tiếp
+//! Steam dời sạch file sang `userdata/<tài khoản cũ>/<appid>/ac`.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +26,7 @@ use crate::blob;
 use crate::error::{Error, Result};
 use crate::local_store::{LocalSnapshot, LocalStore};
 use crate::remote_blob;
-use crate::steam::{remotecache, RootContext, RootToken};
+use crate::steam::{autocloud, remotecache, roots, RootContext, RootToken};
 use crate::supabase::Supabase;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +57,36 @@ pub struct RestoreReport {
     /// Nơi chứa bản sao an toàn của các file đã bị ghi đè.
     pub safety_dir: Option<String>,
     pub warnings: Vec<String>,
+    /// Tài khoản Steam đã nhận bản khôi phục này.
+    pub target_account: u32,
+    /// Tài khoản đã chụp bản lưu, nếu biết.
+    pub source_account: Option<u32>,
+    /// Số file phải đổi id tài khoản trong đường dẫn.
+    pub remapped: usize,
+    /// Số `steam_autocloud.vdf` phải dán lại nhãn sang tài khoản đích.
+    pub markers: usize,
+}
+
+/// Khôi phục *cho ai*. Tách khỏi `RootContext` vì đây là quyết định của tầng
+/// trên: `ctx` chỉ biết cách ghép đường dẫn, còn việc chọn tài khoản nào là
+/// chính sách.
+#[derive(Debug, Clone, Copy)]
+pub struct Plan {
+    /// Tài khoản Steam đang đăng nhập trên máy này — đích của lần khôi phục.
+    pub target_account: u32,
+    /// Tài khoản đã chụp bản lưu. `None` với snapshot cloud đẩy lên từ bản app
+    /// cũ (chưa ghi tài khoản): khi đó không đổi được id trong đường dẫn.
+    pub source_account: Option<u32>,
+}
+
+impl Plan {
+    /// Cùng một tài khoản: đường dẫn giữ nguyên, không cần cảnh báo gì.
+    fn same_account(&self) -> bool {
+        match self.source_account {
+            Some(src) => src == self.target_account,
+            None => true,
+        }
+    }
 }
 
 /// Một file cần dựng lại, bất kể đến từ đâu.
@@ -71,6 +108,7 @@ pub fn run_local<F>(
     store: &LocalStore,
     snap: &LocalSnapshot,
     ctx: &RootContext,
+    plan: Plan,
     safety_root: &Path,
     mut on_progress: F,
 ) -> Result<RestoreReport>
@@ -89,7 +127,7 @@ where
         })
         .collect();
 
-    let mut ap = Applier::new(ctx, safety_root, &snap.id);
+    let mut ap = Applier::new(ctx, plan, safety_root, &snap.id);
     on_progress(Progress::Started {
         total_files: entries.len(),
     });
@@ -99,6 +137,10 @@ where
             done: i,
             total: entries.len(),
         });
+        if autocloud::is_marker(&e.rel_path) {
+            ap.apply_marker(e, &mut on_progress);
+            continue;
+        }
         let Some(target) = ap.target(e, &mut on_progress) else {
             continue;
         };
@@ -114,6 +156,7 @@ pub async fn run_remote<F>(
     sb: &Supabase,
     snapshot_id: &str,
     ctx: &RootContext,
+    plan: Plan,
     safety_root: &Path,
     mut on_progress: F,
 ) -> Result<RestoreReport>
@@ -128,7 +171,7 @@ where
         ));
     }
 
-    let mut ap = Applier::new(ctx, safety_root, snapshot_id);
+    let mut ap = Applier::new(ctx, plan, safety_root, snapshot_id);
     // Nhiều file chung tổ tiên delta thì mỗi tổ tiên chỉ tải một lần.
     let mut cache = remote_blob::Cache::default();
     on_progress(Progress::Started {
@@ -140,6 +183,10 @@ where
             done: i,
             total: entries.len(),
         });
+        if autocloud::is_marker(&e.rel_path) {
+            ap.apply_marker(e, &mut on_progress);
+            continue;
+        }
         let Some(target) = ap.target(e, &mut on_progress) else {
             continue;
         };
@@ -156,40 +203,79 @@ where
 
 struct Applier<'a> {
     ctx: &'a RootContext,
+    plan: Plan,
     /// Tạo theo thời điểm, để hai lần khôi phục liên tiếp không đè lên bản
     /// cứu hộ của nhau.
     safety_dir: PathBuf,
     safety_used: bool,
     restored: usize,
     skipped: usize,
+    remapped: usize,
+    /// Các `steam_autocloud.vdf` đã xét — mỗi file chỉ xét một lần dù có hàng
+    /// trăm file save dùng chung nó.
+    seen_markers: std::collections::BTreeSet<PathBuf>,
+    /// Trong số đó, bao nhiêu file thật sự phải ghi lại.
+    retagged: usize,
     warnings: Vec<String>,
 }
 
+/// Đích đến của một file, kèm gốc root để dò `steam_autocloud.vdf` mà không đi
+/// ra ngoài phạm vi root.
+struct Target {
+    base: PathBuf,
+    path: PathBuf,
+}
+
 impl<'a> Applier<'a> {
-    fn new(ctx: &'a RootContext, safety_root: &Path, source_id: &str) -> Self {
+    fn new(ctx: &'a RootContext, plan: Plan, safety_root: &Path, source_id: &str) -> Self {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         // Id local chứa '@' — hợp lệ trên Windows nhưng thay cho dễ đọc.
         let tag = source_id.replace('@', "_");
+        let mut warnings = Vec::new();
+        if let (Some(src), false) = (plan.source_account, plan.same_account()) {
+            warnings.push(format!(
+                "bản lưu thuộc tài khoản Steam {src}, đang khôi phục cho tài khoản \
+                 {} đang đăng nhập",
+                plan.target_account
+            ));
+        }
         Self {
             ctx,
+            plan,
             safety_dir: safety_root.join(format!("{tag}-{stamp}")),
             safety_used: false,
             restored: 0,
             skipped: 0,
-            warnings: Vec::new(),
+            remapped: 0,
+            seen_markers: std::collections::BTreeSet::new(),
+            retagged: 0,
+            warnings,
         }
     }
 
+    /// Đường dẫn tương đối đã đổi id tài khoản sang tài khoản đích.
+    fn rel_for(&mut self, rel_path: &str) -> String {
+        let Some(src) = self.plan.source_account else {
+            return rel_path.to_string();
+        };
+        let out = roots::remap_account(rel_path, src, self.plan.target_account);
+        if out != rel_path {
+            self.remapped += 1;
+        }
+        out
+    }
+
     /// Phân giải đích đến và khẳng định nó nằm trong root.
-    fn target<F: FnMut(Progress)>(&mut self, e: &Entry, on_progress: &mut F) -> Option<PathBuf> {
-        let reason = if !remotecache::is_safe_rel_path(&e.rel_path) {
+    fn target<F: FnMut(Progress)>(&mut self, e: &Entry, on_progress: &mut F) -> Option<Target> {
+        let rel = self.rel_for(&e.rel_path);
+        let reason = if !remotecache::is_safe_rel_path(&rel) {
             "đường dẫn bất thường"
         } else if let Some(base) = self.ctx.resolve(e.root) {
-            let target = base.join(e.rel_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let path = base.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             // Dư thừa so với `is_safe_rel_path`, nhưng rẻ và bắt được cả các
             // trường hợp lạ do chuẩn hoá đường dẫn của hệ điều hành.
-            if target.starts_with(&base) {
-                return Some(target);
+            if path.starts_with(&base) {
+                return Some(Target { base, path });
             }
             "thoát ra ngoài thư mục gốc"
         } else {
@@ -205,17 +291,19 @@ impl<'a> Applier<'a> {
         None
     }
 
-    fn apply(&mut self, e: &Entry, target: &Path, bytes: &[u8]) -> Result<()> {
+    fn apply(&mut self, e: &Entry, target: &Target, bytes: &[u8]) -> Result<()> {
+        let path = &target.path;
         // File trên đĩa đã giống hệt thì khỏi đụng vào — và khỏi tạo bản cứu
         // hộ thừa.
-        if let Ok(current) = std::fs::read(target) {
+        if let Ok(current) = std::fs::read(path) {
             if blob::sha256_hex(&current) == e.hash {
                 self.restored += 1;
+                self.claim_dir(target);
                 return Ok(());
             }
             // Bản hiện tại vẫn có thể là bản người dùng muốn giữ. Cất đi trước;
             // không cất được thì KHÔNG ghi đè.
-            if let Err(err) = stash(&self.safety_dir, &e.rel_path, target) {
+            if let Err(err) = stash(&self.safety_dir, &e.rel_path, path) {
                 self.skipped += 1;
                 self.warnings.push(format!(
                     "bỏ qua '{}': không tạo được bản cứu hộ ({err})",
@@ -225,9 +313,63 @@ impl<'a> Applier<'a> {
             }
             self.safety_used = true;
         }
-        write_atomic(target, bytes, e.mtime)?;
+        write_atomic(path, bytes, e.mtime)?;
         self.restored += 1;
+        self.claim_dir(target);
         Ok(())
+    }
+
+    /// Dán nhãn tài khoản đích lên `steam_autocloud.vdf` của chỗ save vừa ghi.
+    ///
+    /// Không có bước này thì file vừa khôi phục vẫn mang nhãn tài khoản cũ, và
+    /// lần AutoCloud kế tiếp Steam dời hết sang `userdata/<tài khoản cũ>/…/ac`.
+    fn claim_dir(&mut self, target: &Target) {
+        let Some(marker) = autocloud::marker_for(&target.base, &target.path) else {
+            return;
+        };
+        if !self.seen_markers.insert(marker.clone()) {
+            return;
+        }
+        match autocloud::retag(&marker, self.plan.target_account) {
+            Ok(true) => {
+                self.retagged += 1;
+                log::info!(
+                    "đã dán nhãn tài khoản {} lên {}",
+                    self.plan.target_account,
+                    marker.display()
+                );
+            }
+            Ok(false) => {}
+            Err(e) => self.warnings.push(format!(
+                "không ghi lại được {}: {e} — Steam có thể dời save đi khi đổi tài khoản",
+                marker.display()
+            )),
+        }
+    }
+
+    /// Bản lưu cũ có chụp cả `steam_autocloud.vdf`: KHÔNG ghi lại nội dung cũ
+    /// (nó mang id tài khoản đã chụp), chỉ ghi nhãn của tài khoản đích.
+    fn apply_marker<F: FnMut(Progress)>(&mut self, e: &Entry, on_progress: &mut F) {
+        let Some(target) = self.target(e, on_progress) else {
+            return;
+        };
+        let account = self.plan.target_account;
+        // File này Steam tạo ra và app biết chắc nội dung của nó, nên ghi mới
+        // cũng được — chỗ save đã có nó lúc chụp.
+        let text = autocloud::marker_text(account);
+        if autocloud::read_account(&target.path) == Some(account) {
+            return;
+        }
+        match write_atomic(&target.path, text.as_bytes(), None) {
+            Ok(()) => {
+                self.seen_markers.insert(target.path);
+                self.retagged += 1;
+            }
+            Err(err) => self.warnings.push(format!(
+                "không ghi được '{}': {err}",
+                e.rel_path
+            )),
+        }
     }
 
     fn finish<F: FnMut(Progress)>(self, on_progress: &mut F) -> RestoreReport {
@@ -243,6 +385,10 @@ impl<'a> Applier<'a> {
             skipped: self.skipped,
             safety_dir: safety,
             warnings: self.warnings,
+            target_account: self.plan.target_account,
+            source_account: self.plan.source_account,
+            remapped: self.remapped,
+            markers: self.retagged,
         }
     }
 }

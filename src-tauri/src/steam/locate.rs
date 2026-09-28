@@ -11,7 +11,6 @@ use super::textvdf::{self, Node};
 use crate::error::{Error, Result};
 
 /// Offset chuyển SteamID64 ↔ account id 32-bit (tên thư mục trong `userdata/`).
-const STEAMID64_BASE: u64 = 76_561_197_960_265_728;
 
 #[derive(Debug, Clone)]
 pub struct SteamInstall {
@@ -172,7 +171,7 @@ impl SteamInstall {
             .find(|u| u.account_id == account_id)
             .unwrap_or_else(|| SteamUser {
                 account_id,
-                steam_id64: (STEAMID64_BASE + account_id as u64).to_string(),
+                steam_id64: super::roots::steam_id64(account_id).to_string(),
                 account_name: None,
                 persona_name: None,
                 last_login: None,
@@ -184,7 +183,7 @@ impl SteamInstall {
         self.root
             .join("config")
             .join("avatarcache")
-            .join(format!("{}.png", STEAMID64_BASE + account_id as u64))
+            .join(format!("{}.png", super::roots::steam_id64(account_id)))
     }
 
     pub fn appcache_appinfo(&self) -> PathBuf {
@@ -312,7 +311,7 @@ fn read_users(root: &Path) -> Vec<SteamUser> {
                     let Ok(id64n) = id64.parse::<u64>() else {
                         continue;
                     };
-                    let account_id = (id64n.saturating_sub(STEAMID64_BASE)) as u32;
+                    let account_id = (id64n.saturating_sub(super::roots::steam_id64(0))) as u32;
                     by_id.insert(
                         account_id,
                         SteamUser {
@@ -343,7 +342,7 @@ fn read_users(root: &Path) -> Vec<SteamUser> {
             }
             by_id.entry(account_id).or_insert_with(|| SteamUser {
                 account_id,
-                steam_id64: (STEAMID64_BASE + account_id as u64).to_string(),
+                steam_id64: super::roots::steam_id64(account_id).to_string(),
                 account_name: None,
                 persona_name: None,
                 last_login: None,

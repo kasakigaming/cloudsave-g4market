@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "cloudsave-g4market"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "brotli 7.0.0",

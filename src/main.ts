@@ -20,6 +20,7 @@ import {
   type LocalSnapshot,
   type PushProgress,
   type RemoteSnapshot,
+  type RestoreReport,
   type RunningGame,
   type ScanProgress,
   type Session,
@@ -1010,6 +1011,23 @@ async function doCapture() {
   }
 }
 
+/// Kể lại phần "khôi phục cho tài khoản nào" của báo cáo.
+///
+/// Đáng nói với người dùng vì đây là thứ quyết định save có trụ được không:
+/// Steam dời sạch file của tài khoản khác sang `userdata/<tài khoản đó>/…/ac`
+/// ngay lần quét kế tiếp.
+function logRestoreAccount(r: RestoreReport) {
+  if (r.source_account !== null && r.source_account !== r.target_account) {
+    log(
+      `↔ Bản lưu của tài khoản ${r.source_account} → khôi phục cho tài khoản ` +
+        `${r.target_account} đang đăng nhập` +
+        (r.remapped ? `, đổi đường dẫn ${r.remapped} file` : ""),
+      "warn",
+    );
+  }
+  if (r.markers) log(`✓ Đã báo Steam chỗ save này thuộc tài khoản ${r.target_account}`, "ok");
+}
+
 async function doRestoreLocal(id: string) {
   const ok = window.confirm(
     "Khôi phục bản này sẽ ghi đè file save hiện tại.\n\n" +
@@ -1022,6 +1040,7 @@ async function doRestoreLocal(id: string) {
     const where = r.safety_dir ? ` Bản cũ ở: ${r.safety_dir}` : "";
     setStatus(`Đã khôi phục ${r.restored} file từ máy.${where}`, "ok");
     log(`↺ Khôi phục từ máy: ${r.restored} file${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok");
+    logRestoreAccount(r);
     for (const w of r.warnings) log(w, "warn");
     await loadDetail();
   } catch (e) {
@@ -1094,8 +1113,11 @@ async function doRestoreRemote(id: string) {
   setBusy(true);
   try {
     const r = await api.restoreRemote(id, g.app_id);
-    setStatus(`Đã khôi phục ${r.restored} file từ cloud.`, "ok");
-    log(`↺ Khôi phục từ cloud: ${r.restored} file`, "ok");
+    const where = r.safety_dir ? ` Bản cũ ở: ${r.safety_dir}` : "";
+    setStatus(`Đã khôi phục ${r.restored} file từ cloud.${where}`, "ok");
+    log(`↺ Khôi phục từ cloud: ${r.restored} file${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok");
+    logRestoreAccount(r);
+    for (const w of r.warnings) log(w, "warn");
     await loadDetail();
   } catch (e) {
     setStatus(`Khôi phục thất bại: ${errorText(e)}`, "error");

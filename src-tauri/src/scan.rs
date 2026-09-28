@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::manifest::ludusavi::{self, Manifest, Substitutions};
-use crate::steam::{remotecache, AppInfo, RootContext, RootToken, SteamInstall};
+use crate::steam::{autocloud, remotecache, AppInfo, RootContext, RootToken, SteamInstall};
 
 /// Giới hạn an toàn khi quét đệ quy. Một quy tắc UFS trỏ nhầm vào thư mục cài
 /// game có thể kéo theo hàng chục nghìn file asset; thà cắt còn hơn treo máy.
@@ -319,6 +319,12 @@ fn insert(
         return;
     }
     if !remotecache::is_safe_rel_path(&rel_path) {
+        return;
+    }
+    // `steam_autocloud.vdf` là sổ sách của Steam (nó ghi tài khoản nào đang sở
+    // hữu chỗ save), không phải dữ liệu chơi. Chụp vào rồi khôi phục lại là dán
+    // nhãn tài khoản cũ lên chỗ save — lần đăng nhập sau Steam dời sạch file đi.
+    if autocloud::is_marker(&rel_path) {
         return;
     }
     out.entry((root, rel_path.clone()))

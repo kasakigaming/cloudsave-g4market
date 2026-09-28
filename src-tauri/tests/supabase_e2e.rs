@@ -30,6 +30,14 @@ const TEST_APP_ID: u32 = 413_150;
 // Thiết lập
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Khôi phục cho chính tài khoản đã chụp — đúng với mọi test ở đây.
+fn plan(account: u32) -> restore::Plan {
+    restore::Plan {
+        target_account: account,
+        source_account: Some(account),
+    }
+}
+
 fn load_dotenv() {
     // Test chạy với cwd = src-tauri, `.env` nằm ở thư mục cha.
     for p in ["../.env", ".env"] {
@@ -278,7 +286,8 @@ async fn full_local_first_roundtrip() {
     // ── 8. PHÁ, rồi khôi phục TỪ LOCAL — không đụng tới mạng ─────────────
     wipe(&before);
     let rl =
-        restore::run_local(&h.store, &local, &h.ctx, &safety, |_| {}).expect("khôi phục từ local");
+        restore::run_local(&h.store, &local, &h.ctx, plan(h.account_id), &safety, |_| {})
+            .expect("khôi phục từ local");
     assert_eq!(rl.restored, before.len());
     assert_eq!(rl.skipped, 0);
     let n = verify(&before);
@@ -286,7 +295,7 @@ async fn full_local_first_roundtrip() {
 
     // ── 9. PHÁ, rồi khôi phục TỪ CLOUD ───────────────────────────────────
     wipe(&before);
-    let rr = restore::run_remote(&h.sb, &pushed.snapshot_id, &h.ctx, &safety, |_| {})
+    let rr = restore::run_remote(&h.sb, &pushed.snapshot_id, &h.ctx, plan(h.account_id), &safety, |_| {})
         .await
         .expect("khôi phục từ cloud");
     assert_eq!(rr.restored, before.len());
@@ -532,6 +541,7 @@ async fn delta_chain_survives_gc() {
         &h.sb,
         &pushed[2].snapshot_id,
         &ctx,
+        plan(h.account_id),
         &restore::default_safety_root(),
         |_| {},
     )

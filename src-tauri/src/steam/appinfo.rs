@@ -436,7 +436,7 @@ impl UfsRule {
     /// Trả `None` khi còn placeholder lạ: thà bỏ sót còn hơn đi mở một thư mục
     /// tên đúng bằng chuỗi `{SomethingElse}`.
     pub fn expanded_path(&self, account_id: u32) -> Option<String> {
-        let steam_id64 = STEAMID64_BASE + account_id as u64;
+        let steam_id64 = super::roots::steam_id64(account_id);
         let expanded = self
             .path
             .replace("{64BitSteamID}", &steam_id64.to_string())
@@ -452,9 +452,6 @@ impl UfsRule {
         Some(expanded)
     }
 }
-
-/// Offset chuyển account id 32-bit sang SteamID64.
-const STEAMID64_BASE: u64 = 76_561_197_960_265_728;
 
 #[cfg(test)]
 mod tests {

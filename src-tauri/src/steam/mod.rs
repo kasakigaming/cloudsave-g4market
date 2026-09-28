@@ -3,6 +3,7 @@
 //! Không module nào ở đây cần mạng, cần đăng nhập, hay cần Steam đang chạy.
 
 pub mod appinfo;
+pub mod autocloud;
 pub mod cloudcfg;
 pub mod locate;
 pub mod remotecache;
@@ -12,4 +13,4 @@ pub mod textvdf;
 pub use appinfo::{AppInfo, UfsRule};
 pub use locate::{InstalledApp, SteamInstall, SteamUser};
 pub use remotecache::{CachedFile, RemoteCache};
-pub use roots::{RootContext, RootToken};
+pub use roots::{steam_id64, RootContext, RootToken};

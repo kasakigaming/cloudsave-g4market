@@ -193,6 +193,14 @@ export interface RestoreReport {
   skipped: number;
   safety_dir: string | null;
   warnings: string[];
+  /// Tài khoản Steam đã nhận bản khôi phục (tài khoản đang đăng nhập).
+  target_account: number;
+  /// Tài khoản đã chụp bản lưu, nếu biết.
+  source_account: number | null;
+  /// Số file phải đổi id tài khoản trong đường dẫn.
+  remapped: number;
+  /// Số `steam_autocloud.vdf` phải dán lại nhãn cho tài khoản đích.
+  markers: number;
 }
 
 export interface RemoteSnapshot {

@@ -75,6 +75,15 @@ export interface GameCandidate {
   latest_pushed: boolean;
 }
 
+/// Một game có bản lưu trên cloud (kể cả game chưa cài trên máy này).
+export interface CloudGame {
+  app_id: number;
+  title: string;
+  slug: string;
+  count: number;
+  last_at: string | null;
+}
+
 export interface SaveFile {
   root: RootToken;
   rel_path: string;
@@ -252,8 +261,10 @@ export const api = {
   currentSession: () => invoke<Session | null>("current_session"),
   pushLocal: (snapshotId: string, force: boolean) =>
     invoke<BackupReport>("push_local", { snapshotId, force }),
-  listRemote: (gameSlug?: string) =>
-    invoke<RemoteSnapshot[]>("list_snapshots", { gameSlug: gameSlug ?? null }),
+  /// Tìm theo appid khi có: slug do máy đẩy lên đặt, máy khác có thể đặt khác.
+  listRemote: (gameSlug?: string, appId?: number) =>
+    invoke<RemoteSnapshot[]>("list_snapshots", { gameSlug: gameSlug ?? null, appId: appId ?? null }),
+  cloudGames: () => invoke<CloudGame[]>("cloud_games"),
   restoreRemote: (snapshotId: string, appId: number) =>
     invoke<RestoreReport>("restore_snapshot", { snapshotId, appId }),
   deleteRemote: (snapshotId: string) => invoke<number>("delete_snapshot", { snapshotId }),

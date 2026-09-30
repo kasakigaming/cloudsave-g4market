@@ -82,6 +82,7 @@ pub fn run() {
             commands::current_session,
             commands::push_local,
             commands::list_snapshots,
+            commands::cloud_games,
             commands::restore_snapshot,
             commands::delete_snapshot,
             commands::reconcile_cloud,

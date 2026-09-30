@@ -579,6 +579,39 @@ impl Supabase {
         self.rest(Method::GET, &q, None, None).await
     }
 
+    /// Bản trên cloud của một game, tìm theo appid Steam.
+    ///
+    /// Theo appid chứ không theo `game_slug`: slug do máy đẩy lên đặt từ tên game
+    /// mà máy đó biết (`app-1955830` khi nó không biết tên), nên máy khác tìm
+    /// theo tên của mình sẽ không khớp.
+    pub async fn list_snapshots_for_app(&self, steam_appid: u32) -> Result<Value> {
+        self.rest(
+            Method::GET,
+            &format!(
+                "snapshots?select=id,game_slug,game_title,steam_appid,device_name,device_id,\
+                 file_count,total_bytes,preview,status,label,created_at,parent_id\
+                 &status=eq.complete&steam_appid=eq.{steam_appid}\
+                 &order=created_at.desc&limit=200"
+            ),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Mỗi snapshot hoàn chỉnh một dòng gọn (appid, tên, thời điểm), mới nhất
+    /// trước — đủ để dựng danh sách game có trên cloud mà không tải preview.
+    pub async fn cloud_game_rows(&self) -> Result<Value> {
+        self.rest(
+            Method::GET,
+            "snapshots?select=steam_appid,game_slug,game_title,created_at\
+             &status=eq.complete&steam_appid=not.is.null&order=created_at.desc&limit=1000",
+            None,
+            None,
+        )
+        .await
+    }
+
     /// Id mọi snapshot hoàn chỉnh của người dùng trên cloud. `None` nếu danh
     /// sách có thể bị cắt cụt (PostgREST của Supabase giới hạn 1000 dòng mỗi
     /// lần): đối chiếu với một danh sách cụt sẽ gỡ nhầm dấu cloud của bản cũ.

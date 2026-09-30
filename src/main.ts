@@ -14,6 +14,7 @@ import {
   formatDate,
   timeAgo,
   TRIGGER_LABEL,
+  type CloudGame,
   type GameCandidate,
   type GameChecked,
   type GameScan,
@@ -35,6 +36,8 @@ import "./styles.css";
 let users: SteamUser[] = [];
 let accountId: number | null = null;
 let games: GameCandidate[] = [];
+/// Game có bản lưu trên cloud của người dùng đang đăng nhập cloud.
+let cloudGames: CloudGame[] = [];
 let filter = "";
 let selectedAppId: number | null = null;
 let diskScan: GameScan | null = null;
@@ -48,7 +51,33 @@ let busy = false;
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
-const selected = () => games.find((g) => g.app_id === selectedAppId) ?? null;
+const selected = () => allGames().find((g) => g.app_id === selectedAppId) ?? null;
+
+/// Số bản trên cloud theo appid.
+const cloudCount = (appId: number) => cloudGames.find((c) => c.app_id === appId)?.count ?? 0;
+
+/// Game trên máy + game chỉ có trên cloud (chưa cài, chưa có save trên máy này).
+/// Không có phần sau thì máy mới đăng nhập cloud không thấy game đã đẩy từ máy
+/// khác cho tới khi cài game.
+function allGames(): GameCandidate[] {
+  const known = new Set(games.map((g) => g.app_id));
+  const cloudOnly: GameCandidate[] = cloudGames
+    .filter((c) => !known.has(c.app_id))
+    .map((c) => ({
+      app_id: c.app_id,
+      title: c.title,
+      slug: c.slug,
+      installed: false,
+      has_ufs: false,
+      has_userdata: false,
+      in_manifest: false,
+      running: false,
+      local_count: 0,
+      last_local_at: null,
+      latest_pushed: false,
+    }));
+  return [...games, ...cloudOnly];
+}
 
 /// Thông báo ngắn dạng viên thuốc ở đáy màn hình, tự ẩn. Lỗi hiện lâu hơn
 /// vì người dùng cần thời gian đọc; tiến độ ("Đang…") thì ở lại tới khi có
@@ -174,6 +203,7 @@ async function boot() {
   renderSteamCloud(await api.steamCloudStatus());
 
   if (accountId !== null) {
+    await refreshCloudGames();
     await refreshGames();
     // Bước đầu tiên: kiểm tra hết save đang có và lưu vào máy.
     await runScanAll();
@@ -762,28 +792,38 @@ async function refreshGames() {
 
 function renderGames() {
   const list = $("#game-list");
-  const visible = games.filter((g) => g.title.toLowerCase().includes(filter));
+  const all = allGames();
+  const visible = all.filter((g) => g.title.toLowerCase().includes(filter));
   if (visible.length === 0) {
-    list.innerHTML = `<li class="empty">${games.length ? "Không có game nào khớp." : "Chưa có game nào có save."}</li>`;
+    list.innerHTML = `<li class="empty">${all.length ? "Không có game nào khớp." : "Chưa có game nào có save."}</li>`;
     return;
   }
 
-  // Game đang chạy lên đầu, rồi tới game có bản lưu.
+  // Game đang chạy lên đầu, rồi game có bản lưu trên máy, rồi game có trên cloud.
   visible.sort(
     (a, b) =>
       Number(b.running) - Number(a.running) ||
       Number(b.local_count > 0) - Number(a.local_count > 0) ||
+      Number(cloudCount(b.app_id) > 0) - Number(cloudCount(a.app_id) > 0) ||
       a.title.localeCompare(b.title),
   );
 
   list.innerHTML = visible
     .map((g) => {
+      const onCloud = cloudCount(g.app_id);
       const tags = [
         g.running ? `<span class="tag tag--live">● đang chạy</span>` : "",
         g.local_count > 0
           ? `<span class="tag tag--local" title="Bản lưu trên máy">${g.local_count} bản</span>`
-          : `<span class="tag tag--muted">chưa lưu</span>`,
-        g.latest_pushed ? `<span class="tag tag--cloud" title="Bản mới nhất đã lên cloud">☁ cloud</span>` : "",
+          : onCloud
+            ? ""
+            : `<span class="tag tag--muted">chưa lưu</span>`,
+        onCloud
+          ? `<span class="tag tag--cloud" title="${onCloud} bản trên cloud">☁ ${onCloud}</span>`
+          : g.latest_pushed
+            ? `<span class="tag tag--cloud" title="Bản mới nhất đã lên cloud">☁ cloud</span>`
+            : "",
+        !g.installed ? `<span class="tag tag--muted" title="Game chưa cài trên máy này">chưa cài</span>` : "",
       ].join("");
       const when = g.last_local_at ? `<span class="game__when">${timeAgo(g.last_local_at)}</span>` : "";
       const active = g.app_id === selectedAppId ? " is-active" : "";
@@ -859,7 +899,7 @@ async function loadDetail() {
     ]);
     diskScan = scan;
     locals = loc;
-    remotes = session ? await api.listRemote(g.slug).catch(() => []) : [];
+    remotes = session ? await api.listRemote(g.slug, g.app_id).catch(() => []) : [];
     renderDetail();
   } catch (e) {
     setStatus(`Không tải được chi tiết: ${errorText(e)}`, "error");
@@ -884,7 +924,7 @@ function renderDetail() {
     <div class="detail__head">
       <div>
         <h2>${escapeHtml(g.title)}</h2>
-        <p class="sub">appid ${g.app_id} · ${g.running ? `<strong class="live">đang chạy</strong>` : "không chạy"}</p>
+        <p class="sub">appid ${g.app_id} · ${g.running ? `<strong class="live">đang chạy</strong>` : g.installed ? "không chạy" : "chưa cài trên máy này"}</p>
       </div>
       <button id="btn-capture" class="primary" data-guard ${g.running ? "disabled" : ""}
         title="${g.running ? "Game đang chạy — sẽ tự lưu khi tắt" : "Lưu trạng thái save hiện tại vào máy"}">
@@ -1216,6 +1256,7 @@ async function doSignUp() {
       const then = afterLogin;
       closeLogin();
       log(`Đã đăng ký và đăng nhập cloud: ${session.email ?? ""}`, "ok");
+      await reconcileCloud();
       if (selected()) await loadDetail();
       then?.();
     } else if (r.kind === "needs_confirmation") {
@@ -1232,7 +1273,10 @@ async function doSignOut() {
   await api.signOut();
   session = null;
   remotes = [];
+  cloudGames = [];
+  if (selected() === null) selectedAppId = null;
   renderCloud();
+  renderGames();
   renderDetail();
   log("Đã đăng xuất cloud");
 }
@@ -1246,7 +1290,22 @@ async function reconcileCloud() {
   } catch (e) {
     console.warn("không đối chiếu được cloud:", e);
   }
+  await refreshCloudGames();
   await refreshGames();
+}
+
+/// Danh sách game có bản trên cloud. Lỗi mạng thì giữ danh sách cũ — mất mạng
+/// giữa chừng không nên làm game biến khỏi danh sách.
+async function refreshCloudGames() {
+  if (!session) {
+    cloudGames = [];
+    return;
+  }
+  try {
+    cloudGames = await api.cloudGames();
+  } catch (e) {
+    console.warn("không lấy được danh sách game trên cloud:", e);
+  }
 }
 
 // ── Manifest ─────────────────────────────────────────────────────────────

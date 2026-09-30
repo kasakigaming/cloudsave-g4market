@@ -22,6 +22,12 @@ Sao lưu save game lên Supabase. Đọc đường dẫn save từ chính dữ l
 nhập, và đẩy **đúng bản đã chụp** chứ không quét lại đĩa — thứ bạn thấy trong
 danh sách là thứ lên cloud.
 
+**Đăng nhập cloud là thấy mọi game đã đẩy lên**, kể cả game chưa cài trên máy
+này (nhãn "chưa cài"). Bản trên cloud được tìm theo appid Steam, không theo tên
+game — tên do máy đẩy lên đặt và máy khác có thể đặt khác. Save nằm trong
+AppData / Documents / `userdata` khôi phục được trước khi cài game; save nằm
+trong thư mục cài game thì phải cài game trước.
+
 **Theo tài khoản Steam đang đăng nhập.** Chip trên thanh trên cùng hiện tài
 khoản Steam đang đăng nhập (đọc `ActiveProcess\ActiveUser` trong registry).
 Đổi tài khoản trong Steam thì app đổi theo và quét lại save ngay.

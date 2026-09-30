@@ -504,8 +504,66 @@ pub async fn push_local(
 pub async fn list_snapshots(
     state: State<'_, AppState>,
     game_slug: Option<String>,
+    app_id: Option<u32>,
 ) -> Result<Value> {
-    state.sb()?.list_snapshots(game_slug.as_deref()).await
+    let sb = state.sb()?;
+    match app_id {
+        Some(id) => sb.list_snapshots_for_app(id).await,
+        None => sb.list_snapshots(game_slug.as_deref()).await,
+    }
+}
+
+/// Một game có bản lưu trên cloud.
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudGame {
+    pub app_id: u32,
+    pub title: String,
+    pub slug: String,
+    /// Số bản trên cloud.
+    pub count: usize,
+    /// Thời điểm bản mới nhất.
+    pub last_at: Option<String>,
+}
+
+/// Mọi game có bản lưu trên cloud của người dùng đang đăng nhập — kể cả game
+/// chưa cài trên máy này. Danh sách game trên máy chỉ gồm game đã cài hoặc có
+/// thư mục `userdata`, nên máy mới sẽ không thấy game đã đẩy từ máy khác nếu
+/// không hỏi cloud.
+#[tauri::command]
+pub async fn cloud_games(state: State<'_, AppState>) -> Result<Vec<CloudGame>> {
+    let sb = state.sb()?;
+    if sb.session().await.is_none() {
+        return Err(Error::NotAuthenticated);
+    }
+    let rows = sb.cloud_game_rows().await?;
+    Ok(summarize_cloud_games(&rows))
+}
+
+/// Gom các dòng snapshot (mới nhất trước) thành một dòng mỗi game. Tên lấy
+/// từ bản mới nhất.
+fn summarize_cloud_games(rows: &Value) -> Vec<CloudGame> {
+    let mut by_app: BTreeMap<u32, CloudGame> = BTreeMap::new();
+    for r in rows.as_array().into_iter().flatten() {
+        let Some(app_id) = r
+            .get("steam_appid")
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+        else {
+            continue;
+        };
+        let text = |k: &str| r.get(k).and_then(Value::as_str).map(str::to_owned);
+        by_app
+            .entry(app_id)
+            .and_modify(|g| g.count += 1)
+            .or_insert_with(|| CloudGame {
+                app_id,
+                title: text("game_title").unwrap_or_else(|| format!("App {app_id}")),
+                slug: text("game_slug").unwrap_or_else(|| format!("app-{app_id}")),
+                count: 1,
+                last_at: text("created_at"),
+            });
+    }
+    by_app.into_values().collect()
 }
 
 #[tauri::command]
@@ -629,4 +687,26 @@ pub fn remove_background(id: String) -> Result<()> {
 #[tauri::command]
 pub async fn web_backgrounds() -> Result<Vec<crate::web_backgrounds::WebPhoto>> {
     crate::web_backgrounds::fetch_batch().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloud_games_one_row_per_app_named_from_newest() {
+        // Mới nhất trước, như truy vấn trả về.
+        let rows = serde_json::json!([
+            {"steam_appid": 1_955_830, "game_slug": "control-resonant", "game_title": "Control Resonant", "created_at": "2026-09-29T10:00:00Z"},
+            {"steam_appid": 413_150, "game_slug": "stardew-valley", "game_title": "Stardew Valley", "created_at": "2026-09-28T10:00:00Z"},
+            {"steam_appid": 1_955_830, "game_slug": "app-1955830", "game_title": "App 1955830", "created_at": "2026-09-20T10:00:00Z"},
+            {"steam_appid": null, "game_slug": "non-steam", "game_title": "Non Steam", "created_at": "2026-09-19T10:00:00Z"}
+        ]);
+        let v = summarize_cloud_games(&rows);
+        assert_eq!(v.len(), 2, "game không có appid bị bỏ qua");
+        let control = v.iter().find(|g| g.app_id == 1_955_830).unwrap();
+        assert_eq!(control.count, 2);
+        assert_eq!(control.title, "Control Resonant", "tên lấy từ bản mới nhất");
+        assert_eq!(control.last_at.as_deref(), Some("2026-09-29T10:00:00Z"));
+    }
 }

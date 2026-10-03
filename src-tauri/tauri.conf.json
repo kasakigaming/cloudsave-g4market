@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CloudSave G4Market",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "identifier": "com.g4market.cloudsave",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -36,6 +36,18 @@
     ],
     "icon": [
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwQkRENzI3RjdGNEIzQTIKUldTaXMvVDNKOWU5UUZnOFhhM2pYK2NxV3BtWm1yQ3lHNjhERytvNzFLWm1NR1BQVHQ1d3I4RVMK",
+      "endpoints": [
+        "https://github.com/kasakigaming/cloudsave-g4market/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

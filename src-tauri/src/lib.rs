@@ -26,6 +26,7 @@ pub mod commands;
 pub mod error;
 pub mod local_store;
 pub mod manifest;
+pub mod ota;
 pub mod pack;
 pub mod preview;
 pub mod remote_blob;
@@ -37,6 +38,7 @@ pub mod steam_cloud;
 #[cfg(windows)]
 pub mod steam_ui;
 pub mod supabase;
+pub mod updater;
 pub mod watcher;
 pub mod web_backgrounds;
 
@@ -48,10 +50,18 @@ pub fn run() {
     log::info!("khởi động {}", env!("CARGO_PKG_VERSION"));
     load_dotenv();
 
+    // Giao diện: gói cập nhật nóng đã tải (nếu có, và đúng backend này), không
+    // thì bản nhúng trong exe. Xem `ota.rs`.
+    let mut context = tauri::generate_context!();
+    let ui = ota::UiState::load(&context.package_info().version.to_string());
+    ota::install(&mut context, ui.clone());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
+        .manage(ui)
         .setup(|app| {
             // Watcher chạy suốt vòng đời app: biết game nào đang chơi và chụp
             // save ngay khi game tắt. Không cần mạng, không cần đăng nhập.
@@ -83,6 +93,13 @@ pub fn run() {
             commands::push_local,
             commands::list_snapshots,
             commands::cloud_games,
+            commands::app_version,
+            commands::check_update,
+            commands::install_update,
+            commands::ui_info,
+            commands::check_ui_update,
+            commands::apply_ui_update,
+            commands::ui_ready,
             commands::restore_snapshot,
             commands::delete_snapshot,
             commands::reconcile_cloud,
@@ -94,7 +111,7 @@ pub fn run() {
             commands::remove_background,
             commands::web_backgrounds,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("không khởi động được cửa sổ Tauri");
 }
 

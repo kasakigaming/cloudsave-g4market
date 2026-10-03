@@ -16,13 +16,13 @@ pub enum Error {
     #[error("lỗi mạng: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("Supabase trả lỗi {status}: {body}")]
+    #[error("máy chủ cloud trả lỗi {status}: {body}")]
     Supabase { status: u16, body: String },
 
-    #[error("chưa đăng nhập Supabase")]
+    #[error("chưa đăng nhập cloud")]
     NotAuthenticated,
 
-    #[error("chưa cấu hình Supabase (thiếu SUPABASE_URL hoặc SUPABASE_ANON_KEY)")]
+    #[error("bản này chưa bật cloud")]
     NotConfigured,
 
     /// Snapshot định upload không nối tiếp head hiện tại: hai máy cùng sửa.

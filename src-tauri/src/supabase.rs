@@ -293,7 +293,7 @@ impl Supabase {
             });
         }
         serde_json::from_str(&body)
-            .map_err(|e| Error::Parse(format!("phản hồi Supabase không đọc được: {e} — {body}")))
+            .map_err(|e| Error::Parse(format!("phản hồi của máy chủ cloud không đọc được: {e} — {body}")))
     }
 
     /// Gửi một request tới PostgREST, tự refresh token đúng một lần khi gặp 401.
@@ -340,6 +340,33 @@ impl Supabase {
             return serde_json::from_str(&text).map_err(Into::into);
         }
         Err(Error::NotAuthenticated)
+    }
+
+    /// GET không cần đăng nhập (vai trò anon) — cho dữ liệu công khai như danh
+    /// sách gói giao diện. RLS quyết định đọc được gì.
+    pub async fn public_get(&self, path: &str) -> Result<Value> {
+        let mut req = self
+            .http
+            .get(format!("{}/rest/v1/{path}", self.cfg.url))
+            .header("apikey", &self.cfg.anon_key);
+        // Anon key kiểu cũ là JWT, PostgREST cần nó ở cả Authorization. Key mới
+        // (`sb_publishable_…`) không phải JWT: chỉ gửi ở `apikey`.
+        if !self.cfg.anon_key.starts_with("sb_") {
+            req = req.header("Authorization", format!("Bearer {}", self.cfg.anon_key));
+        }
+        let res = req.send().await?;
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(Error::Supabase {
+                status: status.as_u16(),
+                body: text,
+            });
+        }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(Into::into)
     }
 
     pub async fn rpc(&self, func: &str, args: Value) -> Result<Value> {

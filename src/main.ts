@@ -28,8 +28,17 @@ import {
   type SteamAccount,
   type SteamCloudStatus,
   type SteamUser,
+  type UiUpdate,
+  type UpdateInfo,
+  type UpdateProgress,
 } from "./api";
-import "./styles.css";
+import * as flat from "./flat";
+import "@fontsource-variable/space-grotesk";
+import "@fontsource-variable/jetbrains-mono";
+// Hai bộ CSS cùng nằm trong bundle; mỗi bộ chỉ áp dụng dưới đúng
+// `<html data-theme>` của nó (xem vite.config.ts).
+import "./themes/flat.css";
+import "./themes/glass.css";
 
 // ── State ────────────────────────────────────────────────────────────────
 
@@ -38,7 +47,25 @@ let accountId: number | null = null;
 let games: GameCandidate[] = [];
 /// Game có bản lưu trên cloud của người dùng đang đăng nhập cloud.
 let cloudGames: CloudGame[] = [];
+/// Bản mới tìm thấy lần kiểm tra gần nhất.
+let pendingUpdate: UpdateInfo | null = null;
+/// Số hiệu gói giao diện đang chạy (0 = bản nhúng trong exe).
+let uiVersion = 0;
+let hotRunning = false;
+/// Trạng thái giữ qua lần nạp lại trang sau khi cập nhật nóng.
+const HOT_KEY = "cloudsave.hot";
+const HOT_EVERY_MS = 5 * 60_000;
 let filter = "";
+/// "flat" = giao diện mặc định; "glass" = giao diện 2 (kính). Đặt sẵn trong
+/// <head> bởi public/theme-boot.js để không chớp sai theme lúc mở.
+type Theme = "flat" | "glass";
+let theme: Theme = document.documentElement.dataset.theme === "glass" ? "glass" : "flat";
+/// Nhật ký giữ dạng dữ liệu (không chỉ là DOM) để đổi giao diện hay đổi bộ
+/// lọc thì vẽ lại được. Mới nhất trước.
+let logEntries: flat.LogEntry[] = [];
+let logFilter: flat.LogFilter = "all";
+/// Giao diện mặc định: bảng file trên đĩa đang mở hay đóng.
+let showFiles = false;
 let selectedAppId: number | null = null;
 let diskScan: GameScan | null = null;
 let locals: LocalSnapshot[] = [];
@@ -157,17 +184,304 @@ function setBusy(v: boolean) {
 
 /// Nhật ký hoạt động ở cột phải — nơi người dùng thấy watcher đã làm gì
 /// trong lúc họ đang chơi.
-function log(msg: string, tone: "info" | "ok" | "warn" | "error" = "info") {
-  const li = document.createElement("li");
-  li.className = `log__item log__item--${tone}`;
-  const time = new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-  li.innerHTML = `<time>${time}</time><span>${escapeHtml(msg)}</span>`;
-  const list = $("#log");
-  list.prepend(li);
-  while (list.children.length > 200) list.lastElementChild?.remove();
+///
+/// `opts` chỉ giao diện mặc định dùng: loại (để lọc), icon, câu có tên game in
+/// đậm, giá trị bên phải. Giao diện kính hiện nguyên `msg` như trước.
+function log(
+  msg: string,
+  tone: flat.LogTone = "info",
+  opts: Partial<Omit<flat.LogEntry, "at" | "tone" | "text">> = {},
+) {
+  logEntries.unshift({ at: new Date(), tone, kind: opts.kind ?? "system", text: msg, ...opts });
+  if (logEntries.length > 200) logEntries.length = 200;
+  renderLog();
   if (currentView !== "activity" && tone !== "info") {
     unread += 1;
     renderBadge();
+  }
+}
+
+function renderLog() {
+  const list = $("#log");
+  if (theme === "flat") {
+    list.className = "flog";
+    list.innerHTML = flat.logList(logEntries, logFilter);
+    return;
+  }
+  list.className = "log";
+  list.innerHTML = logEntries
+    .map((e) => {
+      const time = e.at.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+      return `<li class="log__item log__item--${e.tone}"><time>${time}</time><span>${escapeHtml(e.text)}</span></li>`;
+    })
+    .join("");
+}
+
+function initLogFilter() {
+  document.querySelectorAll<HTMLButtonElement>(".logf__btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      logFilter = b.dataset.filter as flat.LogFilter;
+      document.querySelectorAll<HTMLButtonElement>(".logf__btn").forEach((x) => {
+        const on = x === b;
+        x.classList.toggle("is-on", on);
+        x.setAttribute("aria-pressed", String(on));
+      });
+      renderLog();
+    }),
+  );
+}
+
+// ── Giao diện: mặc định / kính ───────────────────────────────────────────
+
+function initTheme() {
+  const sel = $<HTMLSelectElement>("#theme-select");
+  sel.value = theme;
+  sel.addEventListener("change", () => setTheme(sel.value === "glass" ? "glass" : "flat"));
+}
+
+/// Đổi giao diện ngay, không nạp lại trang: vẽ lại mọi phần vẽ theo theme.
+function setTheme(t: Theme) {
+  theme = t;
+  document.documentElement.dataset.theme = t;
+  writeLocal("cloudsave.theme", t);
+  $<HTMLSelectElement>("#theme-select").value = t;
+  applyBackground(bgMode);
+  renderPlaying();
+  renderCloud();
+  renderGames();
+  renderDetail();
+  renderLog();
+  // Vị trí vệt sáng của thanh tab (kính) phụ thuộc bố cục vừa đổi.
+  requestAnimationFrame(() => showView(currentView));
+}
+
+// ── Tự cập nhật ──────────────────────────────────────────────────────────
+
+/// Hỏi GitHub có bản mới không. Tự kiểm tra lúc mở app thì im lặng khi lỗi
+/// (mất mạng, release chưa có `latest.json`); bấm tay thì báo rõ.
+async function checkUpdate(manual: boolean) {
+  const hint = $("#update-hint");
+  if (manual) hint.textContent = "Đang kiểm tra…";
+  // Bản đầy đủ và gói giao diện là hai nguồn độc lập: hỏng một bên (vd release
+  // chưa có latest.json → 404) không được chặn bên kia.
+  let fullError: unknown = null;
+  try {
+    pendingUpdate = await api.checkUpdate();
+    renderUpdate();
+    if (pendingUpdate) {
+      log(`⬆ Có bản mới ${pendingUpdate.version} (đang dùng ${pendingUpdate.current})`, "info");
+    }
+  } catch (e) {
+    fullError = e;
+    if (!manual) console.warn("không kiểm tra được cập nhật:", e);
+  }
+  if (!manual) return;
+
+  // Bấm tay: kiểm luôn gói giao diện và cập nhật nóng ngay nếu có.
+  if (await checkHotUpdate(true)) return;
+  if (fullError) {
+    hint.textContent = `Không kiểm tra được bản đầy đủ: ${errorText(fullError)}`;
+    setStatus(`Không kiểm tra được cập nhật: ${errorText(fullError)}`, "error");
+  } else if (!pendingUpdate) {
+    setStatus("Đang dùng bản mới nhất.", "ok");
+  }
+}
+
+function renderUpdate() {
+  const chip = $<HTMLButtonElement>("#update-chip");
+  const hint = $("#update-hint");
+  chip.hidden = !pendingUpdate;
+  if (!pendingUpdate) {
+    hint.textContent = "Đang dùng bản mới nhất. App tự kiểm tra bản mới mỗi lần mở.";
+    return;
+  }
+  chip.textContent = `⬆ Bản mới ${pendingUpdate.version}`;
+  chip.title = "Tải, kiểm chữ ký, cài rồi tự mở lại";
+  hint.textContent = `Có bản ${pendingUpdate.version} — bấm nút "Bản mới" trên thanh trên cùng để cập nhật.`;
+}
+
+async function doInstallUpdate() {
+  if (!pendingUpdate) return;
+  const ok = window.confirm(
+    `Cập nhật lên bản ${pendingUpdate.version}?\n\n` +
+      "App sẽ tải bộ cài, kiểm chữ ký, đóng lại để cài rồi tự mở lại (vài giây).",
+  );
+  if (!ok) return;
+  const chip = $<HTMLButtonElement>("#update-chip");
+  setBusy(true);
+  chip.textContent = "Đang tải…";
+  log(`⬆ Đang cập nhật lên ${pendingUpdate.version}…`, "info");
+  try {
+    await api.installUpdate();
+  } catch (e) {
+    setStatus(`Cập nhật thất bại: ${errorText(e)}`, "error");
+    log(`Cập nhật thất bại: ${errorText(e)}`, "error");
+    renderUpdate();
+    setBusy(false);
+  }
+}
+
+function onUpdateProgress(p: UpdateProgress) {
+  const chip = $("#update-chip");
+  if (p.kind === "installing") {
+    chip.textContent = "Đang cài…";
+    log("✓ Chữ ký hợp lệ — đang mở bộ cài, app sẽ tự mở lại", "ok");
+    return;
+  }
+  chip.textContent = p.total
+    ? `Đang tải ${Math.floor((p.downloaded / p.total) * 100)}%`
+    : `Đang tải ${formatBytes(p.downloaded)}`;
+}
+
+// ── Cập nhật nóng giao diện ──────────────────────────────────────────────
+//
+// Thay HTML/CSS/JS mà không tắt app: backend tải gói giao diện đã ký, bật nó
+// làm nguồn asset, rồi trang tự nạp lại. Tiến trình (watcher, game đang theo
+// dõi, phiên đăng nhập) không tắt. Xem `src-tauri/src/ota.rs`.
+
+/// Tự kiểm tra định kỳ. Chỉ chạy khi app rảnh: đang khôi phục / đẩy / quét
+/// hay đang mở hộp thoại thì để lần sau, không cắt ngang việc người dùng làm.
+let hotRetry: number | undefined;
+
+async function autoHotUpdate() {
+  if (hotRunning) return;
+  if (busy || scanning || document.querySelector("dialog[open]")) {
+    // Đang bận (vd lượt quét lúc mở app): thử lại sớm, đừng đợi tới chu kỳ sau.
+    window.clearTimeout(hotRetry);
+    hotRetry = window.setTimeout(() => void autoHotUpdate(), 15_000);
+    return;
+  }
+  await checkHotUpdate(false);
+}
+
+/// Trả về `true` nếu đã bắt đầu cập nhật nóng.
+async function checkHotUpdate(manual: boolean): Promise<boolean> {
+  let u: UiUpdate | null;
+  try {
+    u = await api.checkUiUpdate();
+  } catch (e) {
+    if (manual) log(`Không kiểm tra được gói giao diện: ${errorText(e)}`, "warn");
+    else console.warn("không kiểm tra được gói giao diện:", e);
+    return false;
+  }
+  if (!u) return false;
+  void runHotUpdate(u);
+  return true;
+}
+
+/// Thanh tải "giả": tự chạy lên ~90% theo đường cong chậm dần, tiến độ tải
+/// thật đẩy nó nhanh hơn nếu có; xong mới chạy nốt tới 100%. Có thời gian tối
+/// thiểu để thanh không loé lên rồi biến mất khi gói nhỏ tải tức thì.
+const HOT_MIN_MS = 1600;
+let hotReal = 0;
+let hotFrame = 0;
+
+function setHotBar(pct: number) {
+  const v = Math.max(0, Math.min(100, pct));
+  $<HTMLElement>("#hotup-fill").style.width = `${v}%`;
+  $("#hotup-pct").textContent = `${Math.floor(v)}%`;
+  $("#hotup-bar").setAttribute("aria-valuenow", String(Math.floor(v)));
+}
+
+function showHot(title: string, sub: string) {
+  const el = $<HTMLElement>("#hotup");
+  $("#hotup-title").textContent = title;
+  $("#hotup-sub").textContent = sub;
+  el.classList.remove("hotup--error", "hotup--leave");
+  el.hidden = false;
+  // Khung hình sau mới thêm lớp hiện, để hiệu ứng mờ dần chạy.
+  requestAnimationFrame(() => el.classList.add("hotup--in"));
+}
+
+function hideHot(delay: number) {
+  window.setTimeout(() => {
+    const el = $<HTMLElement>("#hotup");
+    el.classList.add("hotup--leave");
+    el.classList.remove("hotup--in");
+    window.setTimeout(() => (el.hidden = true), 450);
+  }, delay);
+}
+
+async function runHotUpdate(u: UiUpdate) {
+  if (hotRunning) return;
+  hotRunning = true;
+  setBusy(true);
+  hotReal = 0;
+  setHotBar(0);
+  showHot("Đang cập nhật giao diện", u.notes || `Giao diện #${u.ui_version} · không cần tắt app`);
+  log(`✨ Đang cập nhật nóng giao diện #${u.ui_version}…`, "info");
+
+  const start = performance.now();
+  const tick = () => {
+    const t = performance.now() - start;
+    const fake = 90 * (1 - Math.exp(-t / 700));
+    setHotBar(Math.max(fake, hotReal * 90));
+    hotFrame = requestAnimationFrame(tick);
+  };
+  hotFrame = requestAnimationFrame(tick);
+
+  try {
+    await api.applyUiUpdate();
+    const left = HOT_MIN_MS - (performance.now() - start);
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
+    cancelAnimationFrame(hotFrame);
+    setHotBar(100);
+    $("#hotup-sub").textContent = "Đang nạp giao diện mới…";
+    // Giữ chỗ đang xem để trang mới mở lại đúng chỗ đó.
+    try {
+      sessionStorage.setItem(HOT_KEY, JSON.stringify({ to: u.ui_version, view: currentView, app: selectedAppId }));
+    } catch {
+      /* không lưu được thì thôi, chỉ mất chỗ đang xem */
+    }
+    window.setTimeout(() => location.reload(), 420);
+  } catch (e) {
+    cancelAnimationFrame(hotFrame);
+    $<HTMLElement>("#hotup").classList.add("hotup--error");
+    $("#hotup-title").textContent = "Không cập nhật được giao diện";
+    $("#hotup-sub").textContent = errorText(e);
+    log(`Cập nhật nóng thất bại: ${errorText(e)}`, "error");
+    hideHot(2600);
+    hotRunning = false;
+    setBusy(false);
+  }
+}
+
+function onUiProgress(p: { downloaded: number; total: number | null }) {
+  if (p.total) hotReal = p.downloaded / p.total;
+}
+
+interface HotState {
+  to: number;
+  view?: string;
+  app?: number | null;
+}
+
+/// Trang vừa nạp lại sau cập nhật nóng: lấy chỗ đang xem và cho thanh tải
+/// chạy nốt rồi mờ đi, để người dùng thấy việc cập nhật đã xong.
+function takeHotState(): HotState | null {
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(HOT_KEY);
+    sessionStorage.removeItem(HOT_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  const hot = JSON.parse(raw) as HotState;
+  setHotBar(100);
+  showHot("Đã cập nhật giao diện", `Giao diện #${hot.to} · app không tắt`);
+  $<HTMLElement>("#hotup").classList.add("hotup--done");
+  hideHot(900);
+  log(`✨ Đã cập nhật nóng lên giao diện #${hot.to} — app không tắt`, "ok");
+  if (hot.view) showView(hot.view);
+  return hot;
+}
+
+function restoreHotState(hot: HotState) {
+  if (hot.app != null && allGames().some((g) => g.app_id === hot.app)) {
+    selectedAppId = hot.app;
+    renderGames();
+    void loadDetail();
   }
 }
 
@@ -176,9 +490,19 @@ function log(msg: string, tone: "info" | "ok" | "warn" | "error" = "info") {
 async function boot() {
   wireEvents();
   await subscribe();
+  // Tới được đây là giao diện (kể cả gói vừa cập nhật nóng) chạy được: tắt bộ
+  // canh giờ quay về bản cũ.
+  void api.uiReady();
+  const hot = takeHotState();
 
   const device = await api.deviceInfo();
   $("#device-name").textContent = device.name;
+
+  uiVersion = (await api.uiInfo()).ui_version;
+  $("#app-version").textContent = (await api.appVersion()) + (uiVersion ? ` · giao diện #${uiVersion}` : "");
+  window.setTimeout(() => void checkUpdate(false), 4000);
+  window.setTimeout(() => void autoHotUpdate(), 6000);
+  window.setInterval(() => void autoHotUpdate(), HOT_EVERY_MS);
 
   cloudConfigured = await api.supabaseConfigured();
   session = cloudConfigured ? await api.currentSession() : null;
@@ -205,6 +529,7 @@ async function boot() {
   if (accountId !== null) {
     await refreshCloudGames();
     await refreshGames();
+    if (hot) restoreHotState(hot);
     // Bước đầu tiên: kiểm tra hết save đang có và lưu vào máy.
     await runScanAll();
   }
@@ -365,6 +690,9 @@ function applyBackground(bg: string) {
   window.clearInterval(rotateTimer);
   window.clearTimeout(rotateTimer);
   rotateTimer = undefined;
+  // Giao diện mặc định là nền phẳng: không tải, không xoay ảnh (đỡ mạng và
+  // GPU). Chuyển sang kính thì `setTheme` gọi lại hàm này.
+  if (theme === "flat") return;
 
   if (bgMode === "canyon") {
     void showPhoto(BUILTIN[0], true);
@@ -513,9 +841,13 @@ function initBackground() {
 }
 
 function wireEvents() {
+  initTheme();
+  initLogFilter();
   initBackground();
   initNav();
   initSteamCloud();
+  $("#update-chip").addEventListener("click", () => void doInstallUpdate());
+  $("#btn-check-update").addEventListener("click", () => void checkUpdate(true));
   $("#user-select").addEventListener("change", (e) => {
     void selectUser(Number((e.target as HTMLSelectElement).value));
   });
@@ -537,6 +869,8 @@ function wireEvents() {
 }
 
 async function subscribe() {
+  await api.on<UpdateProgress>("update-progress", onUpdateProgress);
+  await api.on<{ downloaded: number; total: number | null }>("ui-update-progress", onUiProgress);
   await api.on<RunningGame[]>("running-games", (list) => {
     running = list;
     renderPlaying();
@@ -544,9 +878,21 @@ async function subscribe() {
     renderGames();
     if (selected()) renderDetail();
   });
-  await api.on<RunningGame>("game-started", (g) => log(`▶ Bắt đầu chơi ${g.title}`, "info"));
+  await api.on<RunningGame>("game-started", (g) =>
+    log(`▶ Bắt đầu chơi ${g.title}`, "info", {
+      kind: "session",
+      icon: "play",
+      html: `Bắt đầu chơi <strong>${escapeHtml(g.title)}</strong>`,
+      meta: "Phiên mới",
+    }),
+  );
   await api.on<RunningGame>("game-exited", (g) =>
-    log(`■ ${g.title} đã tắt — đang kiểm tra file save…`, "info"),
+    log(`■ ${g.title} đã tắt — đang kiểm tra file save…`, "info", {
+      kind: "session",
+      icon: "stop",
+      html: `<strong>${escapeHtml(g.title)}</strong> đã tắt — đang kiểm tra file save…`,
+      meta: "Kết thúc phiên",
+    }),
   );
   await api.on<GameChecked>("game-checked", (c) => void onGameChecked(c));
   await api.on<SteamAccount | null>("steam-account", (a) => void onSteamAccount(a));
@@ -569,29 +915,49 @@ async function subscribe() {
 function renderPlaying() {
   const el = $("#now-playing");
   const text = $("#now-playing-text");
+  const names = running.map((r) => r.title).join(", ");
   if (running.length === 0) {
     el.className = "playing playing--idle";
-    text.textContent = "Không có game nào đang chạy";
+    text.textContent = theme === "flat" ? "Không có" : "Không có game nào đang chạy";
   } else {
     el.className = "playing playing--live";
-    text.textContent = `Đang chơi: ${running.map((r) => r.title).join(", ")}`;
+    // Giao diện mặc định đã có nhãn "Đang chơi" phía trên tên game.
+    text.textContent = theme === "flat" ? names : `Đang chơi: ${names}`;
   }
+  el.title = running.length ? `Đang chơi: ${names}` : "Không có game nào đang chạy";
 }
 
 async function onGameChecked(c: GameChecked) {
   const who = c.title;
+  const b = `<strong>${escapeHtml(who)}</strong>`;
   if (c.error) {
-    log(`✗ ${who}: ${c.error}`, "error");
+    log(`✗ ${who}: ${c.error}`, "error", { kind: "save", html: `${b} — ${escapeHtml(c.error)}` });
   } else if (c.outcome?.kind === "created") {
     const s = c.outcome.snapshot;
     log(
       `✓ ${who}: đã lưu bản mới vào máy (${s.files.length} file, ${formatBytes(s.total_bytes)})`,
       "ok",
+      {
+        kind: "save",
+        html: `${b} — đã lưu bản mới vào máy`,
+        meta: `+${s.files.length} file · ${formatBytes(s.total_bytes)}`,
+        metaTone: "lime",
+      },
     );
   } else if (c.outcome?.kind === "unchanged") {
-    log(`= ${who}: save không đổi, không cần lưu thêm`, "info");
+    log(`= ${who}: save không đổi, không cần lưu thêm`, "info", {
+      kind: "save",
+      icon: "check",
+      dim: true,
+      html: `${b} — save không đổi, không cần lưu thêm`,
+      meta: "Không đổi",
+    });
   } else {
-    log(`○ ${who}: không tìm thấy file save`, "warn");
+    log(`○ ${who}: không tìm thấy file save`, "warn", {
+      kind: "save",
+      html: `${b} — không tìm thấy file save`,
+      meta: "Không có save",
+    });
   }
   await refreshGames();
   if (selectedAppId === c.app_id) await loadDetail();
@@ -613,6 +979,8 @@ function renderSteamAccount(a: SteamAccount | null) {
   avatar.innerHTML = a.avatar
     ? `<img src="${a.avatar}" alt="" />`
     : escapeHtml(name.trim().charAt(0).toUpperCase() || "?");
+  // Ảnh đại diện ở thẻ "Tài khoản Steam" trong Cài đặt (giao diện mặc định).
+  $("#set-avatar").innerHTML = avatar.innerHTML;
   chip.title = [
     a.logged_in ? "Steam đang đăng nhập" : "Steam không chạy — tài khoản dùng gần nhất",
     `${name}${a.account_name && a.account_name !== name ? ` (${a.account_name})` : ""}`,
@@ -793,6 +1161,7 @@ async function refreshGames() {
 function renderGames() {
   const list = $("#game-list");
   const all = allGames();
+  $("#lib-count").textContent = `${String(all.length).padStart(2, "0")} game`;
   const visible = all.filter((g) => g.title.toLowerCase().includes(filter));
   if (visible.length === 0) {
     list.innerHTML = `<li class="empty">${all.length ? "Không có game nào khớp." : "Chưa có game nào có save."}</li>`;
@@ -807,6 +1176,14 @@ function renderGames() {
       Number(cloudCount(b.app_id) > 0) - Number(cloudCount(a.app_id) > 0) ||
       a.title.localeCompare(b.title),
   );
+
+  if (theme === "flat") {
+    list.innerHTML = visible
+      .map((g) => flat.gameItem(g, cloudCount(g.app_id), g.app_id === selectedAppId))
+      .join("");
+    wireGameList(list);
+    return;
+  }
 
   list.innerHTML = visible
     .map((g) => {
@@ -834,11 +1211,24 @@ function renderGames() {
     })
     .join("");
 
-  list.querySelectorAll<HTMLLIElement>(".game").forEach((li) => {
-    li.addEventListener("click", () => {
+  wireGameList(list);
+}
+
+function wireGameList(list: HTMLElement) {
+  list.querySelectorAll<HTMLLIElement>("[data-app]").forEach((li) => {
+    const pick = () => {
+      if (selectedAppId !== Number(li.dataset.app)) showFiles = false;
       selectedAppId = Number(li.dataset.app);
       renderGames();
       void loadDetail();
+    };
+    li.addEventListener("click", pick);
+    // Giao diện mặc định: dòng game là nút bấm được bằng bàn phím.
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
     });
   });
 }
@@ -849,7 +1239,7 @@ async function runScanAll() {
   if (accountId === null || scanning) return;
   scanning = true;
   setBusy(true);
-  log("Bắt đầu quét toàn bộ save…");
+  log("Bắt đầu quét toàn bộ save…", "info", { kind: "scan", icon: "scan", meta: "Quét" });
   try {
     const r = await api.scanAll(accountId);
     const parts = [
@@ -861,7 +1251,17 @@ async function runScanAll() {
     ].filter(Boolean);
     const msg = `Quét xong ${r.total} game: ${parts.join(", ")}.`;
     setStatus(msg, r.failed ? "error" : "ok");
-    log(msg, r.failed ? "warn" : "ok");
+    const chips: { text: string; tone?: "lime" }[] = [{ text: `${r.created} mới`, tone: "lime" }];
+    if (r.unchanged) chips.push({ text: `${r.unchanged} không đổi` });
+    if (r.empty) chips.push({ text: `${r.empty} không có save` });
+    if (r.skipped_running) chips.push({ text: `${r.skipped_running} đang chạy` });
+    if (r.failed) chips.push({ text: `${r.failed} lỗi` });
+    log(msg, r.failed ? "warn" : "ok", {
+      kind: "scan",
+      icon: "check",
+      html: `Quét xong <strong>${r.total} game</strong>`,
+      chips,
+    });
     for (const e of r.errors) log(e, "error");
     await refreshGames();
     if (selectedAppId !== null) await loadDetail();
@@ -880,8 +1280,18 @@ function onScanProgress(p: ScanProgress) {
   if (p.kind === "started") el.textContent = `0/${p.total}`;
   else if (p.kind === "game") {
     el.textContent = `${p.done}/${p.total} · ${p.title}`;
-    if (p.result.startsWith("bản mới")) log(`✓ ${p.title}: ${p.result}`, "ok");
-    else if (p.result.startsWith("lỗi")) log(`✗ ${p.title}: ${p.result}`, "error");
+    const t = `<strong>${escapeHtml(p.title)}</strong>`;
+    if (p.result.startsWith("bản mới")) {
+      const n = /(\d+) file/.exec(p.result)?.[1];
+      log(`✓ ${p.title}: ${p.result}`, "ok", {
+        kind: "save",
+        html: `${t} — bản mới`,
+        meta: n ? `+${n} file` : undefined,
+        metaTone: "lime",
+      });
+    } else if (p.result.startsWith("lỗi")) {
+      log(`✗ ${p.title}: ${p.result}`, "error", { kind: "save", html: `${t} — ${escapeHtml(p.result)}` });
+    }
   } else el.textContent = "";
 }
 
@@ -917,6 +1327,20 @@ function renderDetail() {
   const g = selected();
   if (!g) {
     el.innerHTML = `<p class="empty">Chọn một game ở cột bên trái.</p>`;
+    return;
+  }
+
+  if (theme === "flat") {
+    el.innerHTML = flat.detail({
+      g,
+      scan: diskScan,
+      locals,
+      remotes,
+      session: !!session,
+      cloudConfigured,
+      showFiles,
+    });
+    wireDetail();
     return;
   }
 
@@ -963,7 +1387,7 @@ function renderDetail() {
             </div>
           </div>
           <div class="snap__actions">
-            <button class="ghost ghost--accent" data-guard data-push="${s.id}" ${!cloudConfigured ? "disabled title='Chưa cấu hình Supabase'" : ""}>
+            <button class="ghost ghost--accent" data-guard data-push="${s.id}" ${!cloudConfigured ? "disabled title='Bản này chưa bật cloud'" : ""}>
               ${s.remote_id ? "Đẩy lại" : "Đẩy lên cloud"}
             </button>
             <button class="ghost" data-guard data-restore-local="${s.id}" ${g.running ? "disabled" : ""}>Khôi phục</button>
@@ -974,7 +1398,7 @@ function renderDetail() {
     : `<p class="empty">Chưa có bản lưu nào trên máy.</p>`;
 
   const remoteBlock = !session
-    ? `<p class="empty">Đăng nhập cloud để xem bản đã đẩy lên Supabase.</p>`
+    ? `<p class="empty">Đăng nhập cloud để xem các bản đã đẩy lên.</p>`
     : remotes.length
       ? remotes
           .map(
@@ -1034,6 +1458,11 @@ function wireDetail() {
   el.querySelectorAll<HTMLButtonElement>("[data-delete-remote]").forEach((b) =>
     b.addEventListener("click", () => void doDeleteRemote(b.dataset.deleteRemote!)),
   );
+  el.querySelector<HTMLButtonElement>("[data-login]")?.addEventListener("click", () => openLogin());
+  el.querySelector<HTMLButtonElement>("[data-toggle-files]")?.addEventListener("click", () => {
+    showFiles = !showFiles;
+    renderDetail();
+  });
 }
 
 // ── Hành động local ──────────────────────────────────────────────────────
@@ -1065,6 +1494,12 @@ function logRestoreAccount(r: RestoreReport) {
   if (r.markers) log(`✓ Đã báo Steam chỗ save này thuộc tài khoản ${r.target_account}`, "ok");
 }
 
+/// Tên game của một bản lưu local, in đậm — cho dòng nhật ký.
+function restoredTitle(id: string): string {
+  const s = locals.find((x) => x.id === id);
+  return s ? `<strong>${escapeHtml(s.game_title)}</strong>` : "bản lưu";
+}
+
 async function doRestoreLocal(id: string) {
   const ok = window.confirm(
     "Khôi phục bản này sẽ ghi đè file save hiện tại.\n\n" +
@@ -1076,7 +1511,13 @@ async function doRestoreLocal(id: string) {
     const r = await api.restoreLocal(id);
     const where = r.safety_dir ? ` Bản cũ ở: ${r.safety_dir}` : "";
     setStatus(`Đã khôi phục ${r.restored} file từ máy.${where}`, "ok");
-    log(`↺ Khôi phục từ máy: ${r.restored} file${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok");
+    log(`↺ Khôi phục từ máy: ${r.restored} file${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok", {
+      kind: "restore",
+      html: `Khôi phục ${restoredTitle(id)} từ máy`,
+      meta: `${r.restored} file${r.skipped ? ` · bỏ qua ${r.skipped}` : ""}`,
+      metaTone: r.restored ? "cyan" : "muted",
+      dim: r.restored === 0,
+    });
     logRestoreAccount(r);
     for (const w of r.warnings) log(w, "warn");
     await loadDetail();
@@ -1106,7 +1547,14 @@ async function doPush(id: string, force: boolean) {
     if (r.deduped_bytes) parts.push(`bỏ qua ${formatBytes(r.deduped_bytes)} đã có sẵn`);
     const msg = `Đã đẩy lên cloud: ${parts.join(", ")}.`;
     setStatus(msg, "ok");
-    log(`☁ ${msg}`, "ok");
+    const pushed = selected();
+    log(`☁ ${msg}`, "ok", {
+      kind: "cloud",
+      icon: "upload",
+      html: pushed ? `Đẩy <strong>${escapeHtml(pushed.title)}</strong> lên cloud` : "Đẩy lên cloud",
+      meta: `${r.file_count} file · ${formatBytes(r.stored_bytes)}`,
+      metaTone: "cyan",
+    });
     await reconcileCloud();
     await refreshGames();
     await loadDetail();
@@ -1152,7 +1600,13 @@ async function doRestoreRemote(id: string) {
     const r = await api.restoreRemote(id, g.app_id);
     const where = r.safety_dir ? ` Bản cũ ở: ${r.safety_dir}` : "";
     setStatus(`Đã khôi phục ${r.restored} file từ cloud.${where}`, "ok");
-    log(`↺ Khôi phục từ cloud: ${r.restored} file${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok");
+    log(`↺ Khôi phục từ cloud: ${r.restored} file${r.skipped ? `, bỏ qua ${r.skipped}` : ""}`, "ok", {
+      kind: "restore",
+      html: `Khôi phục <strong>${escapeHtml(g.title)}</strong> từ cloud`,
+      meta: `${r.restored} file${r.skipped ? ` · bỏ qua ${r.skipped}` : ""}`,
+      metaTone: r.restored ? "cyan" : "muted",
+      dim: r.restored === 0,
+    });
     logRestoreAccount(r);
     for (const w of r.warnings) log(w, "warn");
     await loadDetail();
@@ -1184,19 +1638,26 @@ async function doDeleteRemote(id: string) {
 let afterLogin: (() => void) | null = null;
 
 function renderCloud() {
-  const status = $("#cloud-status");
+  const box = $("#cloud-status");
+  const status = $("#cloud-status-text");
   const login = $<HTMLButtonElement>("#btn-cloud-login");
   const logout = $<HTMLButtonElement>("#btn-cloud-logout");
+  const f = theme === "flat";
+  box.classList.toggle("is-online", !!session);
   if (!cloudConfigured) {
-    status.textContent = "Cloud: chưa cấu hình";
+    status.textContent = f ? "Không có cloud" : "Cloud: chưa cấu hình";
+    box.title = "Bản này chưa bật cloud";
     login.hidden = true;
     logout.hidden = true;
   } else if (session) {
-    status.textContent = `☁ ${session.email ?? session.user_id}`;
+    const who = session.email ?? session.user_id;
+    status.textContent = f ? "Online" : `☁ ${who}`;
+    box.title = `Đã đăng nhập cloud: ${who}`;
     login.hidden = true;
     logout.hidden = false;
   } else {
-    status.textContent = "Cloud: chưa đăng nhập";
+    status.textContent = f ? "Offline" : "Cloud: chưa đăng nhập";
+    box.title = "Chưa đăng nhập cloud — quét, lưu và khôi phục trên máy vẫn chạy";
     login.hidden = false;
     logout.hidden = true;
   }
@@ -1204,7 +1665,7 @@ function renderCloud() {
 
 function openLogin(then?: () => void) {
   if (!cloudConfigured) {
-    setStatus("Chưa cấu hình Supabase (thiếu SUPABASE_URL / SUPABASE_ANON_KEY trong .env).", "error");
+    setStatus("Bản này chưa bật cloud — quét, lưu và khôi phục trên máy vẫn dùng được.", "error");
     return;
   }
   afterLogin = then ?? null;

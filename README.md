@@ -36,8 +36,8 @@ khoản Steam đang đăng nhập (đọc `ActiveProcess\ActiveUser` trong regis
 
 Steam Cloud bật song song với CloudSave là hai bên cùng giữ một bộ save: khôi
 phục xong, Steam có thể đồng bộ đè bản cũ trên cloud của nó xuống. Chip
-"Steam Cloud" báo đỏ khi đang bật, xanh khi đã tắt. Bật "Tự động tắt Steam
-Cloud" (Cài đặt) thì:
+"Steam Cloud" báo đỏ khi đang bật, xanh khi đã tắt. "Tự động tắt Steam
+Cloud" (Cài đặt) **bật sẵn khi cài mới** — tắt đi thì app nhớ lựa chọn. Khi bật:
 
 - **Tài khoản đang đăng nhập:** app mở Settings → Cloud của Steam, đọc màn hình
   bằng OCR có sẵn của Windows và gạt công tắc — có hiệu lực ngay, không khởi
@@ -109,6 +109,53 @@ liệu chơi.
   thì ghi `steam_account_id` ngược lên cloud cho lần sau.
 - Steam3 id (số 32-bit trần) chỉ đổi khi biết tài khoản nguồn — dò bằng hình
   dạng thì dễ nhầm với số do game tự sinh.
+
+### Tự cập nhật
+
+Mỗi lần mở, app hỏi `latest.json` của release mới nhất trên GitHub
+(`tauri-plugin-updater`, `src-tauri/src/updater.rs`). Có bản mới thì hiện nút
+"⬆ Bản mới" trên thanh trên cùng; bấm là app tải bộ cài, **kiểm chữ ký** bằng
+khoá công khai nhúng trong app, đóng lại, cài ở chế độ passive rồi tự mở lại.
+Không cho cập nhật khi đang có game chạy — app thoát giữa chừng là lỡ lần chụp
+save lúc game tắt. Bản đang chạy phải có sẵn phần này, nên từ 0.1.4 trở về
+trước phải cài tay 0.1.5 một lần.
+
+Phát hành một bản có tự cập nhật:
+
+1. Build có biến môi trường `TAURI_SIGNING_PRIVATE_KEY` (nội dung khoá bí mật)
+   và `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Build ra bộ cài kèm file `.sig`.
+2. Tạo `latest.json` (phiên bản, ngày, nội dung file `.sig`, URL tải bộ cài)
+   và đính **cùng bộ cài** vào release. App hỏi
+   `releases/latest/download/latest.json`, nên release đó phải là "Latest".
+
+**Khoá bí mật không bao giờ vào repo.** Mất khoá thì các bản đã cài không bao
+giờ tự cập nhật được nữa (người dùng phải cài tay bản có khoá mới); lộ khoá thì
+ai có quyền đăng release cũng ký được bộ cài giả. Giữ một bản sao ở chỗ an toàn.
+
+### Cập nhật nóng giao diện (không tắt app)
+
+Giao diện (HTML/CSS/JS) thay được ngay khi app đang chạy
+([`ota.rs`](src-tauri/src/ota.rs)): app thay nguồn asset của Tauri, có gói giao
+diện mới thì phát file từ gói đó, nạp lại WebView — tiến trình không tắt nên
+watcher, game đang theo dõi, phiên đăng nhập vẫn nguyên. Trong lúc thay có thanh
+tải (phẳng ở giao diện mặc định, kính ở giao diện 2). Code Rust thì không thay
+nóng được (nó là chính file exe đang chạy), đổi backend vẫn qua bộ cập nhật ở
+trên.
+
+Danh sách gói nằm trong bảng `ui_releases` trên cloud (đọc công khai, chỉ admin
+ghi); gói tải bằng link trực tiếp của GitHub Releases. Gói chạy với toàn quyền
+của app, nên chặn chặt:
+
+- **Chữ ký** bằng cùng khoá với bộ cập nhật; sai là bỏ, trước khi giải nén.
+- **Đúng backend:** gói build cho phiên bản exe nào chỉ nạp vào đúng phiên bản đó.
+- **Không phát lại gói cũ:** phiên bản + số hiệu nằm trong `ota.json` *bên trong*
+  gói đã ký, phải khớp dòng trong bảng.
+- **Chỉ tải từ GitHub Releases của repo này** (app và bảng cùng kiểm).
+- **Tự quay về:** giao diện mới không báo chạy ổn trong 20 giây thì trở lại bản
+  trước.
+
+Ai sửa được bảng cũng không đẩy được code lạ vào máy người dùng: không có khoá
+bí mật thì không ký được gói.
 
 ## Ý tưởng
 
@@ -324,7 +371,15 @@ src-tauri/src/
 ├─ supabase.rs        GoTrue + PostgREST + RPC bytea
 ├─ backup.rs          đẩy một bản LOCAL: dedupe → upload → metadata → complete
 ├─ restore.rs         từ local hoặc cloud: verify → cứu hộ → tmp-then-rename
+├─ updater.rs         tự cập nhật bản đầy đủ (kiểm chữ ký, cài, mở lại)
+├─ ota.rs             cập nhật nóng giao diện, không tắt app
 └─ commands.rs        lệnh Tauri
+
+src/
+├─ main.ts            trạng thái + hành động, chọn vẽ theo theme
+├─ flat.ts            phần vẽ của giao diện mặc định (hàm thuần)
+├─ api.ts             gọi lệnh Tauri + kiểu dữ liệu
+└─ themes/            flat.css (mặc định) · glass.css (giao diện 2)
 
 src-tauri/tests/
 ├─ scan_real_steam.rs integration test chạy trên Steam thật (#[ignore])
@@ -361,7 +416,25 @@ hình UFS của Steam.
 
 Cách hook chỉ cần thiết khi game phải *tin rằng* Steam Cloud đang hoạt động.
 
-## Ảnh nền
+## Giao diện
+
+Cài đặt → Giao diện → **Kiểu giao diện**, đổi ngay không cần nạp lại:
+
+- **Mặc định** — phẳng, tối, một màu nhấn lime ([`flat.css`](src/themes/flat.css),
+  [`flat.ts`](src/flat.ts)). Theo bộ quy tắc
+  [evon:ui-ux](https://evondev-uiux.vercel.app/ui-ux): không gradient / kính,
+  viền 1px thay cho bóng, mỗi khu vực một nút đặc, chữ đủ tương phản (≥ 4.5:1),
+  không vỡ ở cửa sổ hẹp.
+- **Kính (giao diện 2)** — glassmorphism trên nền ảnh
+  ([`glass.css`](src/themes/glass.css)). Mọi thứ kiểu kính (ảnh nền, độ trong
+  suốt, thanh tải kính) chỉ có ở đây.
+
+Hai bộ CSS cùng nằm trong bundle; lúc build mỗi bộ được gắn
+`html[data-theme="…"]` (`vite.config.ts`) nên không đè lên nhau.
+[`theme-boot.js`](public/theme-boot.js) chọn theme trong `<head>` trước khi trang
+vẽ, để không chớp sai theme lúc mở.
+
+## Ảnh nền (giao diện Kính)
 
 Chọn trong Cài đặt → Hình nền:
 

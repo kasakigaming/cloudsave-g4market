@@ -1,7 +1,7 @@
 {
   "name": "cloudsave-g4market",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,12 +10,15 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "postcss-prefix-selector": "^2.2.1",
     "typescript": "^5.6",
     "vite": "^5.4"
   }

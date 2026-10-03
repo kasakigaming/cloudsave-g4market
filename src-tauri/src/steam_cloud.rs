@@ -59,10 +59,17 @@ pub struct SteamCloudStatus {
 }
 
 /// Tuỳ chọn lưu trên máy, cạnh `device-id`.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Settings {
-    #[serde(default)]
+    /// Mặc định BẬT: Steam Cloud chạy song song là nguyên nhân số một khiến
+    /// save vừa khôi phục bị đè. Người dùng tắt đi thì file ghi `false` và giữ
+    /// nguyên lựa chọn đó.
+    #[serde(default = "default_true")]
     auto_disable_steam_cloud: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn app_dir() -> PathBuf {
@@ -79,7 +86,8 @@ pub fn load_auto_disable() -> bool {
     std::fs::read(settings_path())
         .ok()
         .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
-        .map_or(false, |s| s.auto_disable_steam_cloud)
+        // Chưa có file (cài mới) hay file hỏng: dùng mặc định là bật.
+        .map_or(true, |s| s.auto_disable_steam_cloud)
 }
 
 pub fn save_auto_disable(on: bool) -> Result<()> {
@@ -326,6 +334,16 @@ fn write_both(steam_root: &Path, dir: &Path, account: u32, enabled: bool) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_disable_is_on_by_default_but_respects_saved_choice() {
+        // Cài mới: chưa có trường nào.
+        let fresh: Settings = serde_json::from_str("{}").unwrap();
+        assert!(fresh.auto_disable_steam_cloud);
+        // Người dùng đã tắt: giữ nguyên.
+        let off: Settings = serde_json::from_str(r#"{"auto_disable_steam_cloud":false}"#).unwrap();
+        assert!(!off.auto_disable_steam_cloud);
+    }
 
     const ON: &str = "\"UserRoamingConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"CloudEnabled\"\t\t\"1\"\n\t\t\t}\n\t\t}\n\t}\n}\n";
 

@@ -53,7 +53,7 @@ impl AppState {
         let supabase = match supabase::Config::from_env() {
             Ok(cfg) => Supabase::new(cfg).ok(),
             Err(_) => {
-                log::warn!("chưa cấu hình Supabase — chỉ chạy được chế độ quét cục bộ");
+                log::warn!("chưa bật cloud — chỉ chạy được chế độ quét cục bộ");
                 None
             }
         };

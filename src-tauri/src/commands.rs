@@ -689,6 +689,68 @@ pub async fn web_backgrounds() -> Result<Vec<crate::web_backgrounds::WebPhoto>> 
     crate::web_backgrounds::fetch_batch().await
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tự cập nhật
+// ─────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<Option<crate::updater::UpdateInfo>> {
+    crate::updater::check(&app).await
+}
+
+/// Tải và cài bản mới; app thoát rồi tự mở lại. Không cho chạy khi đang có
+/// game mở: app thoát giữa chừng là lỡ mất lần chụp save lúc game tắt.
+#[tauri::command]
+pub async fn install_update(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+    if !state.running_ids().is_empty() {
+        return Err(Error::Other(
+            "đang có game chạy — tắt game trước để app không lỡ lần chụp save khi game tắt".into(),
+        ));
+    }
+    crate::updater::install(&app).await
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cập nhật nóng giao diện (không tắt app) — xem ota.rs
+// ─────────────────────────────────────────────────────────────────────────
+
+type UiState<'a> = State<'a, std::sync::Arc<crate::ota::UiState>>;
+
+#[tauri::command]
+pub fn ui_info(ui: UiState<'_>) -> crate::ota::UiInfo {
+    ui.info()
+}
+
+#[tauri::command]
+pub async fn check_ui_update(
+    state: State<'_, AppState>,
+    ui: UiState<'_>,
+) -> Result<Option<crate::ota::UiUpdate>> {
+    crate::ota::check(state.supabase.as_ref(), &ui).await
+}
+
+/// Tải, kiểm chữ ký, giải nén và bật gói giao diện mới. Giao diện gọi xong thì
+/// tự nạp lại trang.
+#[tauri::command]
+pub async fn apply_ui_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ui: UiState<'_>,
+) -> Result<crate::ota::UiInfo> {
+    crate::ota::apply(&app, state.supabase.as_ref(), ui.inner().clone()).await
+}
+
+/// Giao diện báo đã khởi động xong — tắt bộ canh giờ quay về bản cũ.
+#[tauri::command]
+pub fn ui_ready(ui: UiState<'_>) {
+    ui.confirm();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

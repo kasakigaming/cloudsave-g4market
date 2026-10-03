@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CloudSave G4Market</title>
+    <!-- Chọn theme trước khi trang vẽ (không chớp sai theme). -->
+    <script src="/theme-boot.js"></script>
   </head>
   <body data-bg="canyon">
     <!-- Nền cho kính. Kính mờ trên nền phẳng một màu trông như hộp xám — nó
@@ -26,29 +28,34 @@
 
     <header class="shell">
       <div class="brand">
-        <span class="brand__mark" aria-hidden="true"></span>
-        <h1>CloudSave</h1>
+        <span class="brand__mark" aria-hidden="true"><svg class="ic brand__ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.1 9.1 4.5 4.5 0 0 0 7 18z"/></svg></span>
+        <div class="brand__text">
+          <h1>Cloud<span class="brand__hl">Save</span></h1>
+          <span class="brand__sub flat-only">G4Market</span>
+        </div>
       </div>
 
       <!-- Điều hướng dạng viên thuốc: vệt kính trượt theo chuột, về lại tab
            đang chọn khi chuột rời đi. -->
       <nav class="pillnav" id="nav" aria-label="Điều hướng">
         <span class="pillnav__glow" id="nav-glow" aria-hidden="true"></span>
-        <button class="pillnav__item is-active" data-view="games">Game</button>
+        <button class="pillnav__item is-active" data-view="games"><svg class="ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="7" width="19" height="10" rx="3"/><path d="M7 10.5v3M5.5 12h3"/><circle cx="15.5" cy="11" r=".6" fill="currentColor"/><circle cx="17.5" cy="13" r=".6" fill="currentColor"/></svg>Game</button>
         <button class="pillnav__item" data-view="activity">
-          Hoạt động <span class="pillnav__badge" id="activity-badge" hidden></span>
+          <svg class="ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></svg>Hoạt động <span class="pillnav__badge" id="activity-badge" hidden></span>
         </button>
-        <button class="pillnav__item" data-view="settings">Cài đặt</button>
+        <button class="pillnav__item" data-view="settings"><svg class="ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4v6M5 14v6M12 4v3M12 11v9M19 4v9M19 17v3"/><path d="M3 10h4M10 7h4M17 17h4"/></svg>Cài đặt</button>
       </nav>
 
       <div class="shell__right">
         <div id="now-playing" class="playing playing--idle" title="Game đang chạy">
           <span class="dot"></span>
+          <span class="chip__label flat-only">Đang chơi</span>
           <span id="now-playing-text">Không có game nào đang chạy</span>
         </div>
         <!-- Tài khoản Steam đang đăng nhập — app tự đổi theo khi Steam đổi. -->
         <div id="steam-chip" class="acct acct--off" hidden>
           <span class="acct__avatar" id="steam-avatar"></span>
+          <span class="chip__label flat-only">Steam</span>
           <span class="acct__name" id="steam-name"></span>
           <span class="acct__dot"></span>
         </div>
@@ -71,8 +78,10 @@
             <span>Tự động tắt Steam Cloud</span>
           </label>
         </div>
-        <span id="cloud-status" class="cloud-status">Cloud: chưa đăng nhập</span>
-        <button id="btn-cloud-login" class="ghost" data-guard>Đăng nhập</button>
+        <!-- Có bản mới: bấm để tải, kiểm chữ ký, cài rồi tự mở lại. -->
+        <button id="update-chip" class="upd" type="button" data-guard hidden></button>
+        <span id="cloud-status" class="cloud-status"><svg class="ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.1 9.1 4.5 4.5 0 0 0 7 18z"/></svg><span id="cloud-status-text">Cloud: chưa đăng nhập</span></span>
+        <button id="btn-cloud-login" class="ghost" data-guard><svg class="ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l4-4-4-4"/><path d="M14 12H4"/></svg>Đăng nhập</button>
         <button id="btn-cloud-logout" class="ghost" data-guard hidden>Đăng xuất</button>
       </div>
     </header>
@@ -81,10 +90,17 @@
       <!-- Game -->
       <section class="view view--games is-active" data-view="games">
         <aside class="glass list">
+          <div class="list__title flat-only">
+            <span>Thư viện</span>
+            <span id="lib-count"></span>
+          </div>
           <div class="list__head">
-            <input id="game-filter" type="search" placeholder="Lọc game…" />
+            <label class="search">
+              <svg class="ic search__ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+              <input id="game-filter" type="search" placeholder="Lọc game…" aria-label="Lọc game" />
+            </label>
             <button id="btn-scan-all" data-guard class="primary" title="Quét và lưu mọi save vào máy">
-              Quét
+              <svg class="ic flat-only" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg>Quét
             </button>
           </div>
           <span id="scan-progress" class="scan-progress"></span>
@@ -102,96 +118,158 @@
 
       <!-- Hoạt động -->
       <section class="view view--activity" data-view="activity">
-        <div class="glass page">
-          <h2>Hoạt động</h2>
-          <p class="page__sub">Những gì app đã làm — kể cả khi bạn đang chơi.</p>
+        <div class="glass page page--log">
+          <div class="page__head">
+            <div>
+              <h2><span class="glass-only">Hoạt động</span><span class="flat-only">Nhật ký hoạt động</span></h2>
+              <p class="page__sub">Những gì app đã làm — kể cả khi bạn đang chơi.</p>
+            </div>
+            <div class="logf flat-only" role="group" aria-label="Lọc nhật ký">
+              <button type="button" class="logf__btn is-on" data-filter="all" aria-pressed="true">Tất cả</button>
+              <button type="button" class="logf__btn" data-filter="save" aria-pressed="false">Lưu</button>
+              <button type="button" class="logf__btn" data-filter="restore" aria-pressed="false">Khôi phục</button>
+              <button type="button" class="logf__btn" data-filter="session" aria-pressed="false">Phiên chơi</button>
+            </div>
+          </div>
           <ol id="log" class="log"></ol>
         </div>
       </section>
 
       <!-- Cài đặt -->
       <section class="view view--settings" data-view="settings">
-        <div class="glass page">
+        <div class="glass page page--settings">
           <h2>Cài đặt</h2>
-          <div class="setting">
-            <div>
-              <label class="setting__label" for="user-select">Tài khoản Steam</label>
-              <p class="setting__hint" id="steam-meta"></p>
+          <div class="sgrid">
+            <div class="scol">
+              <section class="sgroup sgroup--account">
+                <h3 class="sgroup__title flat-only">Tài khoản Steam</h3>
+                <div class="setting setting--account">
+                  <span id="set-avatar" class="set-avatar flat-only" aria-hidden="true"></span>
+                  <div class="setting__main">
+                    <label class="setting__label" for="user-select">Tài khoản Steam</label>
+                    <p class="setting__hint" id="steam-meta"></p>
+                  </div>
+                  <select id="user-select" disabled></select>
+                </div>
+              </section>
+              <section class="sgroup sgroup--sync">
+                <h3 class="sgroup__title flat-only">Đồng bộ</h3>
+                <div class="setting">
+                  <div>
+                    <label class="setting__label" for="setting-scloud-auto">Tự động tắt Steam Cloud</label>
+                    <p class="setting__hint">
+                      Tránh Steam đồng bộ đè lên save CloudSave vừa khôi phục. Tài khoản đang đăng nhập: app
+                      mở Settings → Cloud của Steam và gạt công tắc (mượn chuột 1–2 giây, không khi đang chơi
+                      game). Các tài khoản khác được ghi sẵn cho lần đăng nhập tới. Không khởi động lại Steam.
+                    </p>
+                  </div>
+                  <input id="setting-scloud-auto" class="switch" type="checkbox" />
+                </div>
+                <div class="setting">
+                  <div>
+                    <span class="setting__label">Danh sách game cộng đồng</span>
+                    <p class="setting__hint">ludusavi-manifest, dùng cho game không khai save với Steam.</p>
+                  </div>
+                  <button id="btn-refresh-manifest" data-guard>Cập nhật</button>
+                </div>
+              </section>
             </div>
-            <select id="user-select" disabled></select>
-          </div>
-          <div class="setting">
-            <div>
-              <label class="setting__label" for="bg-select">Hình nền</label>
-              <p class="setting__hint">Xoay vòng lấy ảnh mới liên tục từ Wikimedia Commons — không giới hạn.</p>
-            </div>
-            <select id="bg-select">
-              <option value="canyon">Hẻm núi</option>
-              <option value="rotate">Xoay vòng ảnh phong cảnh từ web</option>
-              <option value="mine">Xoay vòng ảnh của bạn</option>
-            </select>
-          </div>
-          <div class="setting setting--stack">
-            <div class="setting__row">
-              <div>
-                <span class="setting__label">Ảnh của bạn</span>
-                <p class="setting__hint" id="bg-mine-hint">
-                  Thêm ảnh từ máy để xoay vòng cùng ảnh có sẵn — bao nhiêu ảnh cũng được.
-                </p>
-              </div>
-              <button id="btn-add-bg" type="button">Thêm ảnh…</button>
-            </div>
-            <div id="bg-thumbs" class="bg-thumbs" hidden></div>
-          </div>
-          <div class="setting">
-            <div>
-              <span class="setting__label">Độ trong suốt</span>
-              <p class="setting__hint">Kéo lên để thấy rõ hình nền phía sau các khung.</p>
-            </div>
-            <div class="range">
-              <div
-                id="glass-range"
-                class="lslider"
-                role="slider"
-                tabindex="0"
-                aria-label="Độ trong suốt"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow="50"
-              >
-                <div class="lslider__track"><div class="lslider__fill"></div></div>
-                <div class="lslider__thumb"></div>
-              </div>
-              <output id="glass-value">50%</output>
-            </div>
-          </div>
-          <div class="setting">
-            <div>
-              <label class="setting__label" for="setting-scloud-auto">Tự động tắt Steam Cloud</label>
-              <p class="setting__hint">
-                Tránh Steam đồng bộ đè lên save CloudSave vừa khôi phục. Tài khoản đang đăng nhập: app
-                mở Settings → Cloud của Steam và gạt công tắc (mượn chuột 1–2 giây, không khi đang chơi
-                game). Các tài khoản khác được ghi sẵn cho lần đăng nhập tới. Không khởi động lại Steam.
-              </p>
-            </div>
-            <input id="setting-scloud-auto" class="switch" type="checkbox" />
-          </div>
-          <div class="setting">
-            <div>
-              <span class="setting__label">Danh sách game cộng đồng</span>
-              <p class="setting__hint">ludusavi-manifest, dùng cho game không khai save với Steam.</p>
-            </div>
-            <button id="btn-refresh-manifest" data-guard>Cập nhật</button>
-          </div>
-          <div class="setting">
-            <div>
-              <span class="setting__label">Máy này</span>
-              <p class="setting__hint"><span id="device-name">…</span></p>
+            <div class="scol">
+              <section class="sgroup sgroup--look">
+                <h3 class="sgroup__title flat-only">Giao diện</h3>
+                <div class="setting">
+                  <div>
+                    <label class="setting__label" for="theme-select">Kiểu giao diện</label>
+                    <p class="setting__hint">Mặc định: phẳng, tối. Kính: nền ảnh và khung trong suốt.</p>
+                  </div>
+                  <select id="theme-select">
+                    <option value="flat">Mặc định</option>
+                    <option value="glass">Kính (giao diện 2)</option>
+                  </select>
+                </div>
+                <div class="glass-only setting">
+                  <div>
+                    <label class="setting__label" for="bg-select">Hình nền</label>
+                    <p class="setting__hint">Xoay vòng lấy ảnh mới liên tục từ Wikimedia Commons — không giới hạn.</p>
+                  </div>
+                  <select id="bg-select">
+                    <option value="canyon">Hẻm núi</option>
+                    <option value="rotate">Xoay vòng ảnh phong cảnh từ web</option>
+                    <option value="mine">Xoay vòng ảnh của bạn</option>
+                  </select>
+                </div>
+                <div class="glass-only setting setting--stack">
+                  <div class="setting__row">
+                    <div>
+                      <span class="setting__label">Ảnh của bạn</span>
+                      <p class="setting__hint" id="bg-mine-hint">
+                        Thêm ảnh từ máy để xoay vòng cùng ảnh có sẵn — bao nhiêu ảnh cũng được.
+                      </p>
+                    </div>
+                    <button id="btn-add-bg" type="button">Thêm ảnh…</button>
+                  </div>
+                  <div id="bg-thumbs" class="bg-thumbs" hidden></div>
+                </div>
+                <div class="glass-only setting">
+                  <div>
+                    <span class="setting__label">Độ trong suốt</span>
+                    <p class="setting__hint">Kéo lên để thấy rõ hình nền phía sau các khung.</p>
+                  </div>
+                  <div class="range">
+                    <div
+                      id="glass-range"
+                      class="lslider"
+                      role="slider"
+                      tabindex="0"
+                      aria-label="Độ trong suốt"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="50"
+                    >
+                      <div class="lslider__track"><div class="lslider__fill"></div></div>
+                      <div class="lslider__thumb"></div>
+                    </div>
+                    <output id="glass-value">50%</output>
+                  </div>
+                </div>
+              </section>
+              <section class="sgroup sgroup--device">
+                <h3 class="sgroup__title flat-only">Máy này</h3>
+                <div class="setting setting--device">
+                  <span class="set-ic flat-only"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+                  <div>
+                    <span class="setting__label">Máy này</span>
+                    <p class="setting__hint"><span id="device-name">…</span></p>
+                  </div>
+                </div>
+                <div class="setting">
+                  <div>
+                    <span class="setting__label">Phiên bản <span id="app-version">…</span></span>
+                    <p class="setting__hint" id="update-hint">
+                      App tự kiểm tra bản mới mỗi lần mở. Bản cập nhật được kiểm chữ ký trước khi
+                      cài; cài xong app tự mở lại.
+                    </p>
+                  </div>
+                  <button id="btn-check-update" data-guard>Kiểm tra cập nhật</button>
+                </div>
+              </section>
             </div>
           </div>
         </div>
       </section>
     </main>
+
+    <!-- Cập nhật nóng giao diện: thanh tải (phẳng ở giao diện mặc định, kính ở giao diện 2), app không tắt. -->
+    <div id="hotup" class="hotup" hidden>
+      <div class="hotup__card" role="status" aria-live="polite">
+        <p class="hotup__title" id="hotup-title">Đang cập nhật giao diện</p>
+        <p class="hotup__sub" id="hotup-sub">Không cần tắt app</p>
+        <div class="hotup__track" id="hotup-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="hotup__fill" id="hotup-fill"></div>
+        </div>
+        <p class="hotup__pct" id="hotup-pct">0%</p>
+      </div>
+    </div>
 
     <!-- Thông báo ngắn, tự ẩn. -->
     <div id="status" class="toast" role="status" aria-live="polite"></div>
@@ -200,7 +278,7 @@
       <form method="dialog" id="login-form">
         <h3>Đăng nhập cloud</h3>
         <p class="muted">
-          Chỉ cần khi đẩy bản lưu lên Supabase. Quét, lưu và khôi phục trên máy không cần đăng
+          Chỉ cần khi đẩy bản lưu lên cloud. Quét, lưu và khôi phục trên máy không cần đăng
           nhập.
         </p>
         <input id="login-email" type="email" placeholder="email" autocomplete="username" required />

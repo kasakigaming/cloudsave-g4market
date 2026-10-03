@@ -75,6 +75,28 @@ export interface GameCandidate {
   latest_pushed: boolean;
 }
 
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+  date: string | null;
+}
+
+export type UpdateProgress =
+  | { kind: "downloading"; downloaded: number; total: number | null }
+  | { kind: "installing" };
+
+export interface UiInfo {
+  native: string;
+  /// 0 = giao diện nhúng trong exe.
+  ui_version: number;
+}
+
+export interface UiUpdate {
+  ui_version: number;
+  notes: string;
+}
+
 /// Một game có bản lưu trên cloud (kể cả game chưa cài trên máy này).
 export interface CloudGame {
   app_id: number;
@@ -265,6 +287,18 @@ export const api = {
   listRemote: (gameSlug?: string, appId?: number) =>
     invoke<RemoteSnapshot[]>("list_snapshots", { gameSlug: gameSlug ?? null, appId: appId ?? null }),
   cloudGames: () => invoke<CloudGame[]>("cloud_games"),
+
+  // Tự cập nhật
+  appVersion: () => invoke<string>("app_version"),
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  /// App thoát và bộ cài tự mở lại app — lời gọi này thường không trả về.
+  installUpdate: () => invoke<void>("install_update"),
+
+  // Cập nhật nóng giao diện (không tắt app)
+  uiInfo: () => invoke<UiInfo>("ui_info"),
+  checkUiUpdate: () => invoke<UiUpdate | null>("check_ui_update"),
+  applyUiUpdate: () => invoke<UiInfo>("apply_ui_update"),
+  uiReady: () => invoke<void>("ui_ready"),
   restoreRemote: (snapshotId: string, appId: number) =>
     invoke<RestoreReport>("restore_snapshot", { snapshotId, appId }),
   deleteRemote: (snapshotId: string) => invoke<number>("delete_snapshot", { snapshotId }),
@@ -320,8 +354,8 @@ export function authErrorText(e: unknown): string {
   const map: [string, string][] = [
     [
       "over_email_send_rate_limit",
-      "Supabase đã hết lượt gửi email xác nhận (máy chủ email mặc định chỉ gửi khoảng 2 thư/giờ). " +
-        "Đợi khoảng 1 giờ, hoặc tắt \"Confirm email\" trong Supabase Dashboard để đăng ký không cần email.",
+      "Máy chủ đã hết lượt gửi email xác nhận (chỉ gửi được khoảng 2 thư mỗi giờ). " +
+        "Đợi khoảng 1 giờ rồi thử lại.",
     ],
     ["over_request_rate_limit", "Thử quá nhiều lần — đợi vài phút rồi thử lại."],
     ["email_not_confirmed", "Email chưa xác nhận — mở hộp thư và bấm link xác nhận."],
@@ -333,7 +367,7 @@ export function authErrorText(e: unknown): string {
     ["signup_disabled", "Project đang tắt đăng ký tài khoản mới."],
   ];
   for (const [code, msg] of map) if (t.includes(code)) return msg;
-  if (t.includes("lỗi mạng")) return "Không kết nối được Supabase — kiểm tra mạng.";
+  if (t.includes("lỗi mạng")) return "Không kết nối được máy chủ cloud — kiểm tra mạng.";
   return t;
 }
 

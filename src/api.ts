@@ -97,6 +97,18 @@ export interface UiUpdate {
   notes: string;
 }
 
+/// Ảnh game: đường dẫn file trên máy (đổi sang URL bằng convertFileSrc).
+export interface GameArt {
+  /// Icon nhỏ (thường 32×32) — chỉ đủ nét cho ô nhỏ.
+  icon: string | null;
+  /// Icon lớn (≥ 64px) tách từ .ico của game.
+  icon_large: string | null;
+  cover: string | null;
+  header: string | null;
+  /// Tên game từ API store — chỉ có khi Steam trên máy không biết tên.
+  name: string | null;
+}
+
 /// Một game có bản lưu trên cloud (kể cả game chưa cài trên máy này).
 export interface CloudGame {
   app_id: number;
@@ -287,6 +299,8 @@ export const api = {
   listRemote: (gameSlug?: string, appId?: number) =>
     invoke<RemoteSnapshot[]>("list_snapshots", { gameSlug: gameSlug ?? null, appId: appId ?? null }),
   cloudGames: () => invoke<CloudGame[]>("cloud_games"),
+  /// Ảnh có sẵn trên máy, trả về ngay; phần thiếu tải nền rồi báo `game-art`.
+  gameArt: (appIds: number[]) => invoke<Record<string, GameArt>>("game_art", { appIds }),
 
   // Tự cập nhật
   appVersion: () => invoke<string>("app_version"),

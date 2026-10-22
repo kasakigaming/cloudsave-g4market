@@ -957,6 +957,30 @@ button.upd:hover:not(:disabled) {
   color: var(--text);
 }
 
+/* Ô có ảnh game thật (icon Steam): ảnh lấp đầy, viền trung tính. */
+.ftile--img {
+  object-fit: cover;
+  padding: 0;
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+
+/* Ảnh lớn đầu trang chi tiết: bìa đứng 2:3, hoặc ảnh ngang khi game không có bìa. */
+.fcover {
+  display: block;
+  width: 92px;
+  height: 138px;
+  object-fit: cover;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--panel-2);
+}
+
+.fcover--wide {
+  width: 196px;
+  height: 92px;
+}
+
 /* ── Chi tiết game ────────────────────────────────────────────────────── */
 
 .detail {
@@ -989,7 +1013,8 @@ button.upd:hover:not(:disabled) {
   padding: 20px;
 }
 
-.fhead > .ftile {
+.fhead > .ftile,
+.fhead > .fcover {
   grid-area: tile;
   align-self: start;
 }
@@ -1386,6 +1411,14 @@ button.upd:hover:not(:disabled) {
     width: 64px;
     height: 64px;
     font-size: 22px;
+  }
+  .fhead > .fcover {
+    width: 64px;
+    height: 96px;
+  }
+  .fhead > .fcover--wide {
+    width: 136px;
+    height: 64px;
   }
   .fhead__btn {
     justify-self: start;

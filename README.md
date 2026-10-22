@@ -371,6 +371,7 @@ src-tauri/src/
 ├─ supabase.rs        GoTrue + PostgREST + RPC bytea
 ├─ backup.rs          đẩy một bản LOCAL: dedupe → upload → metadata → complete
 ├─ restore.rs         từ local hoặc cloud: verify → cứu hộ → tmp-then-rename
+├─ art.rs             ảnh game: cache Steam → ảnh đã tải → CDN Steam
 ├─ updater.rs         tự cập nhật bản đầy đủ (kiểm chữ ký, cài, mở lại)
 ├─ ota.rs             cập nhật nóng giao diện, không tắt app
 └─ commands.rs        lệnh Tauri
@@ -415,6 +416,28 @@ và vẫn có đúng thông tin đường dẫn vì cả hai đều lấy từ c
 hình UFS của Steam.
 
 Cách hook chỉ cần thiết khi game phải *tin rằng* Steam Cloud đang hoạt động.
+
+## Ảnh game
+
+Mỗi game có icon và bìa thật ([`art.rs`](src-tauri/src/art.rs)), lấy theo thứ tự:
+
+1. **Cache ảnh của Steam trên máy** — `appcache\librarycache\<appid>\`: tức thì,
+   không cần mạng. Hai kiểu thư mục tuỳ đời client Steam (file nằm thẳng trong
+   `<appid>\`, hoặc trong thư mục con tên hash).
+2. **Ảnh app đã tải trước đó** — `%LOCALAPPDATA%\cloudsave-g4market\art\<appid>\`.
+3. **CDN của Steam** cho phần còn thiếu (game chỉ có trên cloud, máy mới):
+   `appinfo.vdf` ghi sẵn đường dẫn chính xác (có hash) của bìa và ảnh ngang —
+   game mới không có ảnh ở đường dẫn "đoán được"; không có thì thử đường dẫn
+   kiểu cũ rồi `store/api/appdetails`.
+
+Icon JPEG trong cache Steam chỉ 32×32, phóng lên là mờ. File `.ico` của game
+(`steam\games\<clienticon>.ico` khi đã cài, hoặc trên CDN) thường có khung
+256×256 dạng PNG — app tách khung đó ra làm icon lớn. Ô lớn đầu trang chi tiết
+không bao giờ dùng icon 32px: bìa đứng › ảnh ngang › icon lớn › chữ viết tắt.
+
+Tải tối đa 4 game một lúc, chỉ nhận đúng file ảnh (JPEG/PNG/WebP, < 5 MB);
+ảnh không có trên Steam thì 7 ngày sau mới hỏi lại. WebView chỉ được đọc hai
+thư mục ảnh (cache Steam và thư mục app), mở lúc chạy qua asset scope.
 
 ## Giao diện
 

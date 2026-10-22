@@ -19,6 +19,7 @@
 //!    hiển thị và không bao giờ tham gia vào việc dựng lại file.
 
 pub mod applog;
+pub mod art;
 pub mod backgrounds;
 pub mod backup;
 pub mod blob;
@@ -66,6 +67,17 @@ pub fn run() {
             // Watcher chạy suốt vòng đời app: biết game nào đang chơi và chụp
             // save ngay khi game tắt. Không cần mạng, không cần đăng nhập.
             watcher::spawn(app.handle().clone());
+            // Ảnh game: cho WebView đọc cache ảnh của Steam và thư mục ảnh app
+            // đã tải về (chỉ đọc, chỉ hai thư mục này).
+            {
+                use tauri::Manager;
+                let scope = app.asset_protocol_scope();
+                let _ = std::fs::create_dir_all(art::cache_dir());
+                let _ = scope.allow_directory(art::cache_dir(), true);
+                if let Ok(steam) = app.state::<AppState>().steam() {
+                    let _ = scope.allow_directory(art::steam_cache_dir(&steam.root), true);
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -93,6 +105,7 @@ pub fn run() {
             commands::push_local,
             commands::list_snapshots,
             commands::cloud_games,
+            commands::game_art,
             commands::app_version,
             commands::check_update,
             commands::install_update,

@@ -1683,6 +1683,41 @@ button.upd[hidden] {
   }
 }
 
+/* ── Ảnh game ─────────────────────────────────────────────────────────── */
+
+.game__icon {
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  vertical-align: -4px;
+  border-radius: 5px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.18);
+}
+
+.detail__id {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.detail__cover {
+  flex: none;
+  width: 56px;
+  height: 84px;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.2),
+    0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+.detail__cover--wide {
+  width: 120px;
+  height: 56px;
+}
+
 /* ── Dùng chung DOM với giao diện mặc định ───────────────────────────────
    Các phần tử chỉ giao diện mặc định dùng (icon tab, nhãn chip, tiêu đề thẻ
    Cài đặt…) bị ẩn; các lớp nhóm của trang Cài đặt trong suốt với bố cục, để

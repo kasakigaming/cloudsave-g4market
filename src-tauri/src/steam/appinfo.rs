@@ -341,6 +341,31 @@ impl AppInfo {
             .map(str::to_owned)
     }
 
+    /// Mã icon của game (`common.icon`, 40 ký tự hex) — tên file icon 32×32
+    /// trên CDN community của Steam.
+    pub fn icon_hash(&self, app_id: u32) -> Option<String> {
+        self.app(app_id)?
+            .path(&["common", "icon"])?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    /// Một giá trị trong `common` có thể là chuỗi, hoặc bảng theo ngôn ngữ
+    /// (`{ english: "…", vietnamese: "…" }`) — lấy bản tiếng Anh, không có thì
+    /// bản đầu tiên.
+    pub fn common_localized(&self, app_id: u32, keys: &[&str]) -> Option<String> {
+        let mut path = vec!["common"];
+        path.extend_from_slice(keys);
+        let v = self.app(app_id)?.path(&path)?;
+        if let Some(s) = v.as_str() {
+            return Some(s.to_owned());
+        }
+        v.get("english")
+            .and_then(Vdf::as_str)
+            .or_else(|| v.entries().find_map(|(_, x)| x.as_str()))
+            .map(str::to_owned)
+    }
+
     /// Tên thư mục cài, để ghép thành `steamapps/common/<installdir>`.
     pub fn install_dir(&self, app_id: u32) -> Option<String> {
         self.app(app_id)?

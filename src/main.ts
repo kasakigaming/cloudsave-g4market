@@ -15,6 +15,7 @@ import {
   timeAgo,
   TRIGGER_LABEL,
   type CloudGame,
+  type GameArt,
   type GameCandidate,
   type GameChecked,
   type GameScan,
@@ -47,6 +48,10 @@ let accountId: number | null = null;
 let games: GameCandidate[] = [];
 /// Game có bản lưu trên cloud của người dùng đang đăng nhập cloud.
 let cloudGames: CloudGame[] = [];
+/// Ảnh game theo appid (đã đổi sang URL). Game đã hỏi rồi thì không hỏi lại —
+/// phần tải nền tự báo về qua sự kiện `game-art`.
+const art = new Map<number, flat.ArtUrls>();
+const artAsked = new Set<number>();
 /// Bản mới tìm thấy lần kiểm tra gần nhất.
 let pendingUpdate: UpdateInfo | null = null;
 /// Số hiệu gói giao diện đang chạy (0 = bản nhúng trong exe).
@@ -228,6 +233,76 @@ function initLogFilter() {
       });
       renderLog();
     }),
+  );
+}
+
+// ── Ảnh game ─────────────────────────────────────────────────────────────
+
+function toUrls(a: GameArt): flat.ArtUrls {
+  const u = (p: string | null) => (p ? convertFileSrc(p) : undefined);
+  return { icon: u(a.icon), iconLarge: u(a.icon_large), cover: u(a.cover), header: u(a.header) };
+}
+
+/// Hỏi ảnh cho các game chưa hỏi. Ảnh có sẵn trên máy về ngay; ảnh còn thiếu
+/// backend tải nền rồi báo `game-art`.
+async function loadArt(ids: number[]) {
+  const fresh = ids.filter((id) => !artAsked.has(id));
+  if (!fresh.length) return;
+  fresh.forEach((id) => artAsked.add(id));
+  try {
+    const got = await api.gameArt(fresh);
+    for (const [id, a] of Object.entries(got)) {
+      art.set(Number(id), toUrls(a));
+      applyName(Number(id), a.name);
+    }
+    scheduleArtRender();
+  } catch (e) {
+    fresh.forEach((id) => artAsked.delete(id));
+    console.warn("không lấy được ảnh game:", e);
+  }
+}
+
+/// Tên tạm "App 123" khi chưa biết tên game.
+const PLACEHOLDER = /^App \d+$/;
+
+/// Thay tên tạm bằng tên thật vừa lấy được (chỉ tên hiển thị; mã nội bộ của
+/// bản lưu giữ nguyên).
+function applyName(id: number, name: string | null) {
+  if (!name) return;
+  for (const g of games) if (g.app_id === id && PLACEHOLDER.test(g.title)) g.title = name;
+  for (const c of cloudGames) if (c.app_id === id && PLACEHOLDER.test(c.title)) c.title = name;
+}
+
+let artFrame = 0;
+/// Gộp nhiều lần ảnh về thành một lần vẽ lại.
+function scheduleArtRender() {
+  if (artFrame) return;
+  artFrame = requestAnimationFrame(() => {
+    artFrame = 0;
+    renderGames();
+    if (selected()) renderDetail();
+  });
+}
+
+/// Ảnh lỗi (file bị xoá, hỏng) → quay về ô chữ viết tắt / bỏ ảnh. CSP không
+/// cho thuộc tính onerror nội tuyến nên bắt ở document.
+function initArtFallback() {
+  document.addEventListener(
+    "error",
+    (e) => {
+      const img = e.target;
+      if (!(img instanceof HTMLImageElement) || !("fb" in img.dataset)) return;
+      if (img.dataset.fbClass) {
+        const span = document.createElement("span");
+        span.className = img.dataset.fbClass;
+        span.setAttribute("aria-hidden", "true");
+        span.textContent = img.dataset.fb ?? "";
+        img.replaceWith(span);
+      } else {
+        img.remove();
+      }
+    },
+    true,
   );
 }
 
@@ -841,6 +916,7 @@ function initBackground() {
 }
 
 function wireEvents() {
+  initArtFallback();
   initTheme();
   initLogFilter();
   initBackground();
@@ -869,6 +945,11 @@ function wireEvents() {
 }
 
 async function subscribe() {
+  await api.on<{ app_id: number; art: GameArt }>("game-art", (m) => {
+    art.set(m.app_id, toUrls(m.art));
+    applyName(m.app_id, m.art.name);
+    scheduleArtRender();
+  });
   await api.on<UpdateProgress>("update-progress", onUpdateProgress);
   await api.on<{ downloaded: number; total: number | null }>("ui-update-progress", onUiProgress);
   await api.on<RunningGame[]>("running-games", (list) => {
@@ -1162,6 +1243,7 @@ function renderGames() {
   const list = $("#game-list");
   const all = allGames();
   $("#lib-count").textContent = `${String(all.length).padStart(2, "0")} game`;
+  void loadArt(all.map((g) => g.app_id));
   const visible = all.filter((g) => g.title.toLowerCase().includes(filter));
   if (visible.length === 0) {
     list.innerHTML = `<li class="empty">${all.length ? "Không có game nào khớp." : "Chưa có game nào có save."}</li>`;
@@ -1179,7 +1261,7 @@ function renderGames() {
 
   if (theme === "flat") {
     list.innerHTML = visible
-      .map((g) => flat.gameItem(g, cloudCount(g.app_id), g.app_id === selectedAppId))
+      .map((g) => flat.gameItem(g, cloudCount(g.app_id), g.app_id === selectedAppId, art.get(g.app_id)))
       .join("");
     wireGameList(list);
     return;
@@ -1204,8 +1286,10 @@ function renderGames() {
       ].join("");
       const when = g.last_local_at ? `<span class="game__when">${timeAgo(g.last_local_at)}</span>` : "";
       const active = g.app_id === selectedAppId ? " is-active" : "";
+      const ga = art.get(g.app_id);
+      const icon = ga?.iconLarge ?? ga?.icon ?? ga?.cover ?? ga?.header;
       return `<li class="game${active}" data-app="${g.app_id}">
-        <span class="game__title">${escapeHtml(g.title)}</span>
+        <span class="game__title">${icon ? `<img class="game__icon" src="${escapeHtml(icon)}" alt="" loading="lazy" data-fb />` : ""}${escapeHtml(g.title)}</span>
         <span class="game__meta">${tags}${when}</span>
       </li>`;
     })
@@ -1339,16 +1423,22 @@ function renderDetail() {
       session: !!session,
       cloudConfigured,
       showFiles,
+      art: art.get(g.app_id),
     });
     wireDetail();
     return;
   }
 
+  const a = art.get(g.app_id);
+  const cover = a?.cover ?? a?.header;
   const head = `
     <div class="detail__head">
-      <div>
-        <h2>${escapeHtml(g.title)}</h2>
-        <p class="sub">appid ${g.app_id} · ${g.running ? `<strong class="live">đang chạy</strong>` : g.installed ? "không chạy" : "chưa cài trên máy này"}</p>
+      <div class="detail__id">
+        ${cover ? `<img class="detail__cover${a?.cover ? "" : " detail__cover--wide"}" src="${escapeHtml(cover)}" alt="" data-fb />` : ""}
+        <div>
+          <h2>${escapeHtml(g.title)}</h2>
+          <p class="sub">appid ${g.app_id} · ${g.running ? `<strong class="live">đang chạy</strong>` : g.installed ? "không chạy" : "chưa cài trên máy này"}</p>
+        </div>
       </div>
       <button id="btn-capture" class="primary" data-guard ${g.running ? "disabled" : ""}
         title="${g.running ? "Game đang chạy — sẽ tự lưu khi tắt" : "Lưu trạng thái save hiện tại vào máy"}">

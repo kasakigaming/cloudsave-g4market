@@ -93,8 +93,39 @@ export function tileTone(title: string, hasSaves: boolean): string {
   return TONES[code % TONES.length];
 }
 
-function tile(g: GameCandidate, hasSaves: boolean, size = ""): string {
-  return `<span class="ftile ftile--${tileTone(g.title, hasSaves)}${size ? ` ftile--${size}` : ""}" aria-hidden="true">${esc(initials(g.title))}</span>`;
+/// Ảnh game đã đổi sang URL dùng được trong <img>.
+export interface ArtUrls {
+  icon?: string;
+  iconLarge?: string;
+  cover?: string;
+  header?: string;
+}
+
+function tile(g: GameCandidate, hasSaves: boolean, size = "", art?: ArtUrls): string {
+  const tone = tileTone(g.title, hasSaves);
+  const cls = `ftile ftile--${tone}${size ? ` ftile--${size}` : ""}`;
+  const ini = esc(initials(g.title));
+  // Icon vuông nếu có; không thì cắt vuông bìa / ảnh ngang — vẫn hơn chữ viết tắt.
+  const src = art?.iconLarge ?? art?.icon ?? art?.cover ?? art?.header;
+  if (src) {
+    // Ảnh lỗi thì main.ts đổi lại thành ô chữ viết tắt (data-fb).
+    return `<img class="${cls} ftile--img" src="${esc(src)}" alt="" loading="lazy" decoding="async" data-fb="${ini}" data-fb-class="${cls}" />`;
+  }
+  return `<span class="${cls}" aria-hidden="true">${ini}</span>`;
+}
+
+/// Ảnh lớn đầu trang chi tiết: bìa đứng › ảnh ngang › icon lớn › chữ viết tắt.
+/// Không bao giờ dùng icon 32px — phóng lên 92px là mờ.
+function hero(g: GameCandidate, hasSaves: boolean, art?: ArtUrls): string {
+  const tone = tileTone(g.title, hasSaves);
+  const fbClass = `ftile ftile--${tone} ftile--xl`;
+  const ini = esc(initials(g.title));
+  const img = (src: string, cls: string) =>
+    `<img class="${cls}" src="${esc(src)}" alt="" decoding="async" data-fb="${ini}" data-fb-class="${fbClass}" />`;
+  if (art?.cover) return img(art.cover, "fcover");
+  if (art?.header) return img(art.header, "fcover fcover--wide");
+  if (art?.iconLarge) return img(art.iconLarge, `${fbClass} ftile--img`);
+  return `<span class="${fbClass}" aria-hidden="true">${ini}</span>`;
 }
 
 // ── Thời gian ────────────────────────────────────────────────────────────
@@ -127,7 +158,7 @@ function ago(iso: string): string {
 
 // ── Danh sách game ───────────────────────────────────────────────────────
 
-export function gameItem(g: GameCandidate, onCloud: number, active: boolean): string {
+export function gameItem(g: GameCandidate, onCloud: number, active: boolean, art?: ArtUrls): string {
   const hasSaves = g.local_count > 0 || onCloud > 0;
   const bits: string[] = [];
   if (g.running) bits.push(`<span class="flive"><span class="flive__dot"></span>Live</span>`);
@@ -140,7 +171,7 @@ export function gameItem(g: GameCandidate, onCloud: number, active: boolean): st
     .map((b, i) => (i === 0 || bits[i - 1].startsWith('<span class="flive"') ? b : `· ${b}`))
     .join(" ");
   return `<li class="fgame${active ? " is-active" : ""}" data-app="${g.app_id}" tabindex="0" role="button" aria-pressed="${active}">
-    ${tile(g, hasSaves)}
+    ${tile(g, hasSaves, "", art)}
     <span class="fgame__body">
       <span class="fgame__title">${esc(g.title)}</span>
       <span class="fgame__meta">${meta}</span>
@@ -158,6 +189,7 @@ export interface DetailData {
   session: boolean;
   cloudConfigured: boolean;
   showFiles: boolean;
+  art?: ArtUrls;
 }
 
 const SOURCE: Record<string, string> = {
@@ -186,7 +218,7 @@ export function detail(d: DetailData): string {
       : stat("Cloud", "—", "chưa đăng nhập");
 
   const head = `<section class="fcard fhead">
-    ${tile(g, hasSaves, "xl")}
+    ${hero(g, hasSaves, d.art)}
     <div class="fhead__main">
       <div class="fhead__tags">${tags}</div>
       <h2 class="fhead__title">${esc(g.title)}</h2>

@@ -227,11 +227,22 @@ async fn candidates(state: &AppState, account_id: u32) -> Result<Vec<GameCandida
             continue;
         }
 
-        let title = appinfo
+        let base = appinfo
             .app_name(app_id)
             .or_else(|| installed.get(&app_id).map(|a| a.name.clone()))
             .unwrap_or_else(|| format!("App {app_id}"));
-        let slug = slugify(&title);
+        // Mã nội bộ (slug) giữ theo tên gốc: bản lưu trên máy gắn với nó, đổi
+        // là bản lưu cũ biến khỏi game. Chỉ tên hiển thị được thay.
+        let slug = slugify(&base);
+        let title = if crate::art::is_placeholder(&base) {
+            manifest
+                .as_ref()
+                .and_then(|m| m.by_steam_app(app_id).map(|(n, _)| n.to_owned()))
+                .or_else(|| crate::art::cached_name(app_id))
+                .unwrap_or(base)
+        } else {
+            base
+        };
         let snaps = local.get(&slug);
 
         out.push(GameCandidate {
@@ -536,7 +547,12 @@ pub async fn cloud_games(state: State<'_, AppState>) -> Result<Vec<CloudGame>> {
         return Err(Error::NotAuthenticated);
     }
     let rows = sb.cloud_game_rows().await?;
-    Ok(summarize_cloud_games(&rows))
+    let mut games = summarize_cloud_games(&rows);
+    // Máy đẩy lên không biết tên game thì ghi "App 123"; máy này có thể biết.
+    for g in games.iter_mut().filter(|g| crate::art::is_placeholder(&g.title)) {
+        g.title = state.title_of(g.app_id).await;
+    }
+    Ok(games)
 }
 
 /// Gom các dòng snapshot (mới nhất trước) thành một dòng mỗi game. Tên lấy
@@ -687,6 +703,60 @@ pub fn remove_background(id: String) -> Result<()> {
 #[tauri::command]
 pub async fn web_backgrounds() -> Result<Vec<crate::web_backgrounds::WebPhoto>> {
     crate::web_backgrounds::fetch_batch().await
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Ảnh game
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Ảnh có sẵn trên máy cho các game, trả về ngay. Game nào còn thiếu ảnh thì
+/// tải từ Steam trong nền, xong báo sự kiện `game-art` { app_id, art }.
+#[tauri::command]
+pub async fn game_art(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    app_ids: Vec<u32>,
+) -> Result<BTreeMap<u32, crate::art::GameArt>> {
+    let root = state.steam().ok().map(|s| s.root);
+    let appinfo = state.appinfo().await.ok();
+    let manifest = state.manifest().await;
+    let installed = state.steam().map(|s| s.installed_apps()).unwrap_or_default();
+    let mut out = BTreeMap::new();
+    for id in app_ids.into_iter().take(2_000) {
+        let mut art = crate::art::local(root.as_deref(), id);
+        // Tên: chỉ hỏi API store khi không nguồn nào trên máy biết.
+        let known = appinfo.as_ref().and_then(|a| a.app_name(id)).is_some()
+            || installed.contains_key(&id)
+            || manifest.as_ref().is_some_and(|m| m.by_steam_app(id).is_some());
+        if known {
+            art.name = None;
+        }
+        let need_name = !known;
+        if crate::art::needs_fetch(id, &art, need_name) && crate::art::claim(id) {
+            let hints = crate::art::Hints {
+                icon: appinfo.as_ref().and_then(|a| a.icon_hash(id)),
+                clienticon: appinfo.as_ref().and_then(|a| a.common_localized(id, &["clienticon"])),
+                cover: appinfo.as_ref().and_then(|a| {
+                    a.common_localized(id, &["library_assets_full", "library_capsule", "image"])
+                }),
+                header: appinfo.as_ref().and_then(|a| a.common_localized(id, &["header_image"])),
+                need_name,
+            };
+            let (app, have, root) = (app.clone(), art.clone(), root.clone());
+            tauri::async_runtime::spawn(async move {
+                match crate::art::fetch_limited(id, root, hints, have.clone()).await {
+                    Ok(got) if got != have => {
+                        let _ = app.emit("game-art", serde_json::json!({ "app_id": id, "art": got }));
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("không tải được ảnh game {id}: {e}"),
+                }
+                crate::art::release(id);
+            });
+        }
+        out.insert(id, art);
+    }
+    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────

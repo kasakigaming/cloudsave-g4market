@@ -127,7 +127,20 @@ impl AppState {
                 return a.name.clone();
             }
         }
-        format!("App {app_id}")
+        self.fallback_name(app_id)
+            .await
+            .unwrap_or_else(|| format!("App {app_id}"))
+    }
+
+    /// Tên game khi Steam trên máy không biết (game của tài khoản khác, đã
+    /// gỡ…): danh sách game cộng đồng, rồi tên đã lấy từ API store trước đó.
+    pub async fn fallback_name(&self, app_id: u32) -> Option<String> {
+        if let Some(m) = self.manifest().await {
+            if let Some((name, _)) = m.by_steam_app(app_id) {
+                return Some(name.to_owned());
+            }
+        }
+        crate::art::cached_name(app_id)
     }
 
     // ── Tài khoản theo dõi ───────────────────────────────────────────────

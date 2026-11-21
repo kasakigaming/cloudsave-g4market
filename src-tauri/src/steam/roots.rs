@@ -195,9 +195,28 @@ pub fn account_from_id64(seg: &str) -> Option<u32> {
     (id != 0).then_some(id)
 }
 
-/// Các tài khoản có SteamID64 nằm thành cả một đoạn trong `rel_path`.
+/// Account id nếu `seg` là SteamID64 viết thành đúng 16 ký tự hex — cách Dark
+/// Souls II và III đặt tên thư mục save (vd `011000010a1b2c3d`). Tám ký tự đầu
+/// của mọi tài khoản cá nhân đều là `01100001`, nên tên thư mục hex khác không
+/// lọt vào.
+pub fn account_from_id64_hex(seg: &str) -> Option<u32> {
+    if seg.len() != 16 || !seg.starts_with("01100001") {
+        return None;
+    }
+    let low = &seg[8..];
+    if !low.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let id = u32::from_str_radix(low, 16).ok()?;
+    (id != 0).then_some(id)
+}
+
+/// Các tài khoản có SteamID64 nằm thành cả một đoạn trong `rel_path`, viết
+/// bằng 17 chữ số hay 16 ký tự hex.
 pub fn accounts_in_path(rel_path: &str) -> impl Iterator<Item = u32> + '_ {
-    rel_path.split('/').filter_map(account_from_id64)
+    rel_path
+        .split('/')
+        .filter_map(|seg| account_from_id64(seg).or_else(|| account_from_id64_hex(seg)))
 }
 
 /// Đổi id tài khoản nằm trong `rel_path` từ `from` sang `to`.
@@ -216,6 +235,12 @@ pub fn remap_account(rel_path: &str, from: u32, to: u32) -> String {
     }
     let (from64, to64) = (steam_id64(from).to_string(), steam_id64(to).to_string());
     let (from32, to32) = (from.to_string(), to.to_string());
+    // Thư mục hex giữ kiểu chữ của nó: game tạo chữ thường, nhưng trên đĩa đã
+    // có sao thì để vậy.
+    let (to_hex, to_hex_upper) = (
+        format!("{:016x}", steam_id64(to)),
+        format!("{:016X}", steam_id64(to)),
+    );
     rel_path
         .split('/')
         .map(|seg| {
@@ -223,6 +248,12 @@ pub fn remap_account(rel_path: &str, from: u32, to: u32) -> String {
                 to64.as_str()
             } else if seg == from32 {
                 to32.as_str()
+            } else if account_from_id64_hex(seg) == Some(from) {
+                if seg.bytes().any(|b| b.is_ascii_uppercase()) {
+                    to_hex_upper.as_str()
+                } else {
+                    to_hex.as_str()
+                }
             } else {
                 seg
             }
@@ -274,6 +305,30 @@ mod tests {
         assert_eq!(account_from_id64("76561197960265728"), None);
         // Nằm lẫn trong tên thì không tính.
         assert_eq!(accounts_in_path("x/save_76561198071376839.sav").count(), 0);
+    }
+
+    #[test]
+    fn hex_folder_names_are_recognised_and_remapped() {
+        // Dark Souls III: thư mục là SteamID64 viết bằng 16 ký tự hex.
+        let a = format!("{:016x}", steam_id64(111_111_111));
+        let b = format!("{:016x}", steam_id64(222_222_222));
+        let rel = format!("DarkSoulsIII/{a}/DS30000.sl2");
+        assert_eq!(accounts_in_path(&rel).collect::<Vec<_>>(), vec![111_111_111]);
+        assert_eq!(
+            remap_account(&rel, 111_111_111, 222_222_222),
+            format!("DarkSoulsIII/{b}/DS30000.sl2")
+        );
+        // Kiểu chữ của thư mục được giữ.
+        assert_eq!(
+            remap_account(&format!("X/{}/s", a.to_uppercase()), 111_111_111, 222_222_222),
+            format!("X/{}/s", b.to_uppercase())
+        );
+        // Tài khoản khác, hay 16 ký tự hex không phải SteamID64, thì để nguyên.
+        assert_eq!(remap_account(&rel, 5, 7), rel);
+        assert_eq!(account_from_id64_hex("0110000100000000"), None);
+        assert_eq!(account_from_id64_hex("deadbeefdeadbeef"), None);
+        assert_eq!(account_from_id64_hex("01100001+a1b2c3d"), None);
+        assert_eq!(account_from_id64_hex("011000010a1b2c3"), None);
     }
 
     #[test]

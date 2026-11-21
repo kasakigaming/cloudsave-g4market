@@ -21,10 +21,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::blob;
+use crate::embedded_id;
 use crate::error::{Error, Result};
 use crate::preview;
 use crate::scan::GameScan;
-use crate::steam::RootToken;
+use crate::steam::{autocloud, RootToken};
 
 /// File lớn hơn mức này bị bỏ qua khi chụp. Postgres free tier có 500 MB;
 /// save khổng lồ (colony RimWorld, thành phố Cities Skylines) nên đi Supabase
@@ -57,6 +58,11 @@ pub struct LocalFile {
     pub mtime: Option<DateTime<Utc>>,
     /// sha256 hex của nội dung gốc — cũng là tên blob.
     pub hash: String,
+    /// Những chỗ nội dung file có ghi id của tài khoản đã chụp (xem
+    /// `embedded_id`). Khác rỗng = file gắn với tài khoản đó: khôi phục sang
+    /// tài khoản khác thì game có thể từ chối đọc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub account_refs: Vec<embedded_id::Hit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,12 +173,28 @@ impl LocalStore {
                     previews.push(p);
                 }
             }
+            // File đánh dấu của Steam ghi id tài khoản là đúng chức năng của nó,
+            // và lúc khôi phục app tự ghi lại — không tính là save gắn tài khoản.
+            let account_refs = if autocloud::is_marker(&f.rel_path) {
+                Vec::new()
+            } else {
+                embedded_id::scan(&bytes, account_id)
+            };
+            if !account_refs.is_empty() {
+                log::info!(
+                    "'{}' của {} có ghi id tài khoản {account_id} trong nội dung ({} chỗ)",
+                    f.rel_path,
+                    scan.slug,
+                    embedded_id::total(&account_refs)
+                );
+            }
             files.push(LocalFile {
                 root: f.root,
                 rel_path: f.rel_path.clone(),
                 size: bytes.len() as u64,
                 mtime: f.mtime,
                 hash,
+                account_refs,
             });
         }
 

@@ -1869,14 +1869,16 @@ dialog::backdrop {
   background: rgb(4 6 9 / 0.7);
 }
 
-#login-form {
+#login-form,
+#signup-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 22px;
 }
 
-#login-form h3 {
+#login-form h3,
+#signup-form h3 {
   margin: 0;
   font: 700 16px/1.2 var(--sans);
   text-transform: uppercase;
@@ -1886,7 +1888,8 @@ dialog::backdrop {
   color: var(--muted);
 }
 
-#login-form .muted {
+#login-form .muted,
+#signup-form .muted {
   margin: 0 0 6px;
   font-size: 12.5px;
 }

@@ -940,8 +940,19 @@ function wireEvents() {
     e.preventDefault();
     void doSignIn();
   });
-  $("#btn-signup").addEventListener("click", () => void doSignUp());
+  $("#btn-signup").addEventListener("click", () => openSignup());
   $("#btn-login-cancel").addEventListener("click", () => closeLogin());
+
+  $("#signup-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    void doSignUp();
+  });
+  $("#btn-signup-back").addEventListener("click", () => backToLogin());
+  for (const id of ["#signup-password", "#signup-password2"]) {
+    $(id).addEventListener("input", () => {
+      $("#signup-msg").textContent = signupPasswordHint();
+    });
+  }
 }
 
 async function subscribe() {
@@ -1096,7 +1107,7 @@ function renderSteamCloud(s: SteamCloudStatus) {
   }[state];
   $("#scloud-title").className = `scloud-pop__title scloud-pop__title--${state}`;
 
-  const why = "Steam có thể đồng bộ đè bản save cũ trên cloud của nó lên save CloudSave vừa khôi phục.";
+  const why = "Steam có thể đồng bộ đè bản save cũ trên cloud của nó lên save SaveKeeper vừa khôi phục.";
   const now = s.logged_in
     ? " Bấm tắt: app mở Settings → Cloud của Steam và gạt công tắc giúp bạn (mượn chuột 1–2 giây, không khởi động lại Steam)."
     : " Tài khoản này đang không đăng nhập nên tắt xong là có hiệu lực ở lần đăng nhập tới.";
@@ -1112,7 +1123,7 @@ function renderSteamCloud(s: SteamCloudStatus) {
         : now),
     queued:
       "App đã ghi sẵn cài đặt tắt. Steam chỉ đọc lúc đăng nhập, nên lần đăng nhập tới tài khoản này sẽ tắt Steam Cloud.",
-    off: "CloudSave là nơi giữ save duy nhất, không bị Steam ghi đè.",
+    off: "SaveKeeper là nơi giữ save duy nhất, không bị Steam ghi đè.",
   }[state];
 
   const btn = $<HTMLButtonElement>("#btn-scloud-toggle");
@@ -1582,6 +1593,12 @@ function logRestoreAccount(r: RestoreReport) {
     log(`↔ Đã chuyển ${r.remapped} file sang thư mục của tài khoản ${r.target_account}`, "ok");
   }
   if (r.markers) log(`✓ Đã báo Steam chỗ save này thuộc tài khoản ${r.target_account}`, "ok");
+  // Save FromSoftware ghi id tài khoản ngay trong file; không đổi thì game báo
+  // "Failed to load save data" dù file nằm đúng thư mục.
+  const rebound = r.rebound?.length ?? 0;
+  if (rebound) {
+    log(`✓ Đã đổi id tài khoản bên trong ${rebound} file save để game đọc được`, "ok");
+  }
 }
 
 /// Tên game của một bản lưu local, in đậm — cho dòng nhật ký.
@@ -1789,14 +1806,58 @@ async function doSignIn() {
   }
 }
 
+/// Mở hộp đăng ký thay cho hộp đăng nhập. Việc đang chờ sau khi đăng nhập
+/// (`afterLogin`) được giữ nguyên; email đã gõ được mang sang, mật khẩu thì không
+/// — mật khẩu phải gõ lại hai lần ở đây.
+function openSignup() {
+  $<HTMLDialogElement>("#login-dialog").close();
+  $<HTMLInputElement>("#signup-email").value = $<HTMLInputElement>("#login-email").value.trim();
+  $<HTMLInputElement>("#signup-password").value = "";
+  $<HTMLInputElement>("#signup-password2").value = "";
+  $("#signup-msg").textContent = "";
+  $<HTMLDialogElement>("#signup-dialog").showModal();
+  const email = $<HTMLInputElement>("#signup-email");
+  (email.value ? $<HTMLInputElement>("#signup-password") : email).focus();
+}
+
+/// Đóng hộp đăng ký, mở lại hộp đăng nhập với email vừa gõ và một lời nhắn (nếu có).
+function backToLogin(note = "") {
+  $<HTMLDialogElement>("#signup-dialog").close();
+  $<HTMLInputElement>("#login-email").value = $<HTMLInputElement>("#signup-email").value.trim();
+  $<HTMLInputElement>("#login-password").value = "";
+  $("#login-msg").textContent = note;
+  $<HTMLDialogElement>("#login-dialog").showModal();
+  $<HTMLInputElement>("#login-password").focus();
+}
+
+/// Lời nhắc khi hai ô mật khẩu chưa dùng được; chuỗi rỗng là đã ổn.
+/// Ô nhập lại còn trống thì chưa nhắc "không khớp" để khỏi báo khi người dùng đang gõ dở.
+function signupPasswordHint(final = false): string {
+  const p1 = $<HTMLInputElement>("#signup-password").value;
+  const p2 = $<HTMLInputElement>("#signup-password2").value;
+  if (p1.length > 0 && p1.length < 6) return "Mật khẩu cần ít nhất 6 ký tự.";
+  if (final && p1.length === 0) return "Nhập mật khẩu (ít nhất 6 ký tự).";
+  if (final && p2.length === 0) return "Nhập lại mật khẩu để xác nhận.";
+  if (p2.length > 0 && p1 !== p2) return "Hai ô mật khẩu chưa khớp.";
+  return "";
+}
+
 async function doSignUp() {
-  const email = $<HTMLInputElement>("#login-email").value.trim();
-  const password = $<HTMLInputElement>("#login-password").value;
-  const msg = $("#login-msg");
-  if (!email || password.length < 6) {
-    msg.textContent = "Nhập email và mật khẩu (ít nhất 6 ký tự).";
+  const email = $<HTMLInputElement>("#signup-email").value.trim();
+  const password = $<HTMLInputElement>("#signup-password").value;
+  const msg = $("#signup-msg");
+  if (!email) {
+    msg.textContent = "Nhập email.";
     return;
   }
+  const hint = signupPasswordHint(true);
+  if (hint) {
+    msg.textContent = hint;
+    return;
+  }
+  const submit = $<HTMLButtonElement>("#btn-signup-submit");
+  if (submit.disabled) return;
+  submit.disabled = true;
   msg.textContent = "Đang đăng ký…";
   try {
     const r = await api.signUp(email, password);
@@ -1805,18 +1866,21 @@ async function doSignUp() {
       session = r.session;
       renderCloud();
       const then = afterLogin;
-      closeLogin();
+      afterLogin = null;
+      $<HTMLDialogElement>("#signup-dialog").close();
       log(`Đã đăng ký và đăng nhập cloud: ${session.email ?? ""}`, "ok");
       await reconcileCloud();
       if (selected()) await loadDetail();
       then?.();
     } else if (r.kind === "needs_confirmation") {
-      msg.textContent = `Đã gửi thư xác nhận tới ${r.email}. Bấm link trong thư rồi quay lại đăng nhập.`;
+      backToLogin(`Đã gửi thư xác nhận tới ${r.email}. Bấm link trong thư rồi đăng nhập.`);
     } else {
-      msg.textContent = "Email này đã có tài khoản — hãy đăng nhập.";
+      backToLogin("Email này đã có tài khoản — hãy đăng nhập.");
     }
   } catch (e) {
     msg.textContent = authErrorText(e);
+  } finally {
+    submit.disabled = false;
   }
 }
 

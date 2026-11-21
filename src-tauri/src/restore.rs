@@ -15,6 +15,12 @@
 //! đổi sang tài khoản đó, và `steam_autocloud.vdf` được dán lại nhãn. Không có
 //! ba việc này thì khôi phục bản của tài khoản khác xong, lần quét kế tiếp
 //! Steam dời sạch file sang `userdata/<tài khoản cũ>/<appid>/ac`.
+//!
+//! Với save còn ghi id tài khoản **trong nội dung** theo định dạng app biết sửa
+//! (BND4 của FromSoftware, xem `bnd4`), id đó cũng được đổi sang tài khoản của
+//! thư mục đích ngay trước khi ghi. Kho local và cloud giữ nguyên nội dung gốc —
+//! blob được đặt tên theo sha256 của nó — nên bản đã sửa chỉ tồn tại trên đĩa,
+//! và "file trên đĩa đã đúng chưa" được so với sha256 của **bản đã sửa**.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +29,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::blob;
+use crate::bnd4;
+use crate::embedded_id;
 use crate::error::{Error, Result};
 use crate::local_store::{LocalSnapshot, LocalStore};
 use crate::remote_blob;
@@ -67,6 +75,14 @@ pub struct RestoreReport {
     pub remapped: usize,
     /// Số `steam_autocloud.vdf` phải dán lại nhãn sang tài khoản đích.
     pub markers: usize,
+    /// File có ghi id của tài khoản nguồn ngay trong nội dung, trong lần khôi
+    /// phục sang tài khoản khác (xem `embedded_id`), mà app **không** sửa được:
+    /// nội dung được ghi nguyên, nên game có thể từ chối đọc những file này.
+    pub account_bound: Vec<String>,
+    /// File đã được đổi id tài khoản bên trong nội dung sang tài khoản của thư
+    /// mục đích (xem `bnd4`). Nội dung ghi ra đĩa khác bản lưu đúng ở các id đó
+    /// và các mã kiểm đi kèm.
+    pub rebound: Vec<String>,
 }
 
 /// Khôi phục *cho ai*. Tách khỏi `RootContext` vì đây là quyết định của tầng
@@ -317,6 +333,10 @@ struct Applier<'a> {
     seen_markers: std::collections::BTreeSet<PathBuf>,
     /// Trong số đó, bao nhiêu file thật sự phải ghi lại.
     retagged: usize,
+    /// File mang id của tài khoản nguồn trong nội dung mà app không sửa được.
+    account_bound: Vec<String>,
+    /// File đã được đổi id tài khoản bên trong nội dung.
+    rebound: Vec<String>,
     warnings: Vec<String>,
 }
 
@@ -325,6 +345,9 @@ struct Applier<'a> {
 struct Target {
     base: PathBuf,
     path: PathBuf,
+    /// Đường dẫn tương đối sau khi đã đổi id tài khoản — cho biết file rơi vào
+    /// thư mục của tài khoản nào.
+    rel: String,
 }
 
 impl<'a> Applier<'a> {
@@ -351,8 +374,104 @@ impl<'a> Applier<'a> {
             remapped: 0,
             seen_markers: std::collections::BTreeSet::new(),
             retagged: 0,
+            account_bound: Vec::new(),
+            rebound: Vec::new(),
             warnings,
         }
+    }
+
+    /// Đổi id tài khoản bên trong nội dung sang tài khoản của thư mục đích, với
+    /// định dạng app biết sửa. `None` = ghi nguyên nội dung của bản lưu.
+    ///
+    /// Tài khoản đích là tài khoản **của thư mục file sắp rơi vào**, không mặc
+    /// nhiên là tài khoản đang đăng nhập: một bản lưu chứa thư mục của hai tài
+    /// khoản được khôi phục nguyên đường dẫn (xem `decide_remap`), và file của
+    /// ai phải tiếp tục là của người đó.
+    fn rebind_inside(&mut self, e: &Entry, target: &Target, bytes: &[u8]) -> Option<Vec<u8>> {
+        if !bnd4::looks_like(bytes) {
+            return None;
+        }
+        let me = self.plan.target_account;
+        let foreign_source = self.remap.source.filter(|s| *s != me);
+        let dest = match roots::accounts_in_path(&target.rel).last() {
+            Some(a) => a,
+            None => {
+                // Thư mục mang Steam3 id của tài khoản nguồn mà không được đổi:
+                // file ở lại với tài khoản nguồn.
+                let stays = foreign_source
+                    .is_some_and(|s| target.rel.split('/').any(|seg| seg == s.to_string()));
+                if stays {
+                    return None;
+                }
+                me
+            }
+        };
+        // Ai là chủ: tài khoản của thư mục lúc chụp trước, rồi tài khoản đã chụp.
+        let hints: Vec<u32> = roots::accounts_in_path(&e.rel_path)
+            .last()
+            .into_iter()
+            .chain(self.remap.source)
+            .collect();
+        match bnd4::rebind(bytes, &hints, dest) {
+            bnd4::Outcome::Rebound(r) => {
+                log::info!(
+                    "'{}': đổi {} chỗ ghi id tài khoản {} → {dest} trong {} mục{}",
+                    e.rel_path,
+                    r.replaced,
+                    r.from,
+                    r.entries,
+                    r.cipher
+                        .map(|c| format!(" (mã hoá kiểu {c})"))
+                        .unwrap_or_default()
+                );
+                self.rebound.push(e.rel_path.clone());
+                Some(r.bytes)
+            }
+            bnd4::Outcome::Refused(why) => {
+                // Khôi phục cho chính tài khoản đã chụp thì file vốn đang chơi
+                // được; chỉ đáng báo khi đổi tài khoản.
+                if foreign_source.is_some() {
+                    self.warnings.push(format!(
+                        "'{}' có ghi id tài khoản bên trong nhưng không đổi được ({why}) — \
+                         game có thể không đọc được save này khi chơi bằng tài khoản {dest}",
+                        e.rel_path
+                    ));
+                    self.account_bound.push(e.rel_path.clone());
+                } else {
+                    log::info!("'{}': không đổi id bên trong ({why})", e.rel_path);
+                }
+                None
+            }
+            bnd4::Outcome::NotThisFormat
+            | bnd4::Outcome::NoAccount
+            | bnd4::Outcome::AlreadyOwned => None,
+        }
+    }
+
+    /// Ghi nhận file còn mang id của tài khoản nguồn trong nội dung khi khôi
+    /// phục sang tài khoản khác — tức file mà `rebind_inside` không biết sửa.
+    /// Chỉ báo: thay id xong còn phải tính lại mã kiểm riêng của từng định
+    /// dạng, sai một byte là game từ chối cả file.
+    ///
+    /// Dò ngay tại đây, trên đúng dãy byte sắp ghi, nên dùng được cho cả bản
+    /// local lẫn bản cloud và cả bản chụp từ trước khi app biết dò.
+    fn note_account_refs(&mut self, e: &Entry, bytes: &[u8]) {
+        let target = self.plan.target_account;
+        let Some(source) = self.remap.source.filter(|s| *s != target) else {
+            return;
+        };
+        // File mà `rebind_inside` đã báo là không đổi được thì khỏi báo lần hai.
+        let hits = embedded_id::scan(bytes, source);
+        if hits.is_empty() || self.account_bound.contains(&e.rel_path) {
+            return;
+        }
+        self.warnings.push(format!(
+            "'{}' có ghi id tài khoản Steam {source} bên trong nội dung ({} chỗ) — \
+             game có thể không đọc được save này khi chơi bằng tài khoản {target}",
+            e.rel_path,
+            embedded_id::total(&hits)
+        ));
+        self.account_bound.push(e.rel_path.clone());
     }
 
     /// Đường dẫn tương đối đã đổi id tài khoản sang tài khoản đích.
@@ -377,7 +496,7 @@ impl<'a> Applier<'a> {
             // Dư thừa so với `is_safe_rel_path`, nhưng rẻ và bắt được cả các
             // trường hợp lạ do chuẩn hoá đường dẫn của hệ điều hành.
             if path.starts_with(&base) {
-                return Some(Target { base, path });
+                return Some(Target { base, path, rel });
             }
             "thoát ra ngoài thư mục gốc"
         } else {
@@ -395,10 +514,18 @@ impl<'a> Applier<'a> {
 
     fn apply(&mut self, e: &Entry, target: &Target, bytes: &[u8]) -> Result<()> {
         let path = &target.path;
+        // Bản đã đổi id (nếu có) mới là thứ được ghi và được so với đĩa: so với
+        // hash của bản lưu thì lần khôi phục nào cũng thấy "khác" và ghi lại.
+        let rebound = self.rebind_inside(e, target, bytes);
+        let (bytes, hash) = match &rebound {
+            Some(fixed) => (fixed.as_slice(), blob::sha256_hex(fixed)),
+            None => (bytes, e.hash.clone()),
+        };
+        self.note_account_refs(e, bytes);
         // File trên đĩa đã giống hệt thì khỏi đụng vào — và khỏi tạo bản cứu
         // hộ thừa.
         if let Ok(current) = std::fs::read(path) {
-            if blob::sha256_hex(&current) == e.hash {
+            if blob::sha256_hex(&current) == hash {
                 self.restored += 1;
                 self.claim_dir(target);
                 return Ok(());
@@ -492,6 +619,8 @@ impl<'a> Applier<'a> {
             source_origin: self.remap.origin,
             remapped: self.remapped,
             markers: self.retagged,
+            account_bound: self.account_bound,
+            rebound: self.rebound,
         }
     }
 }

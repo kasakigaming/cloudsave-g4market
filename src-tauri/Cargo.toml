@@ -1,6 +1,6 @@
 [package]
 name         = "cloudsave-g4market"
-version = "0.1.7"
+version = "0.1.8"
 description  = "Sao lưu save game lên Supabase — đọc đường dẫn từ Steam UFS và ludusavi-manifest"
 edition      = "2021"
 rust-version = "1.77"
@@ -33,6 +33,10 @@ brotli = "7"
 bzip2  = "0.4"
 base64 = "0.22"
 hex    = "0.4"
+# Save FromSoftware (BND4): mỗi mục mở đầu bằng MD5 của phần còn lại, một số game còn mã
+# hoá AES-128-CBC (xem bnd4.rs).
+md-5   = "0.10"
+aes    = "0.8"
 
 globset = "0.4"
 walkdir = "2"

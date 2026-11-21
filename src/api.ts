@@ -246,6 +246,11 @@ export interface RestoreReport {
   remapped: number;
   /// Số `steam_autocloud.vdf` phải dán lại nhãn cho tài khoản đích.
   markers: number;
+  /// File còn ghi id của tài khoản nguồn trong nội dung mà app không sửa được.
+  account_bound: string[];
+  /// File đã được đổi id tài khoản bên trong nội dung (save FromSoftware).
+  /// Không có khi giao diện mới chạy trên backend cũ (cập nhật nóng giao diện).
+  rebound?: string[];
 }
 
 export interface RemoteSnapshot {

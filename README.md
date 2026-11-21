@@ -1,4 +1,9 @@
-# CloudSave G4Market
+# SaveKeeper
+
+> Tên cũ: **CloudSave G4Market** (đến bản 0.1.7). Từ 0.1.8 app, bộ cài và file
+> exe mang tên SaveKeeper. Repo, thư mục dữ liệu (`cloudsave-g4market`) và
+> identifier (`com.g4market.cloudsave`) giữ tên cũ để bản đã cài tự cập nhật
+> được và không mất bản lưu.
 
 Sao lưu save game lên Supabase. Đọc đường dẫn save từ chính dữ liệu Steam trên
 đĩa, không hook vào tiến trình Steam.
@@ -34,7 +39,7 @@ khoản Steam đang đăng nhập (đọc `ActiveProcess\ActiveUser` trong regis
 
 ### Tắt Steam Cloud
 
-Steam Cloud bật song song với CloudSave là hai bên cùng giữ một bộ save: khôi
+Steam Cloud bật song song với SaveKeeper là hai bên cùng giữ một bộ save: khôi
 phục xong, Steam có thể đồng bộ đè bản cũ trên cloud của nó xuống. Chip
 "Steam Cloud" báo đỏ khi đang bật, xanh khi đã tắt. "Tự động tắt Steam
 Cloud" (Cài đặt) **bật sẵn khi cài mới** — tắt đi thì app nhớ lựa chọn. Khi bật:
@@ -109,6 +114,36 @@ liệu chơi.
   thì ghi `steam_account_id` ngược lên cloud cho lần sau.
 - Steam3 id (số 32-bit trần) chỉ đổi khi biết tài khoản nguồn — dò bằng hình
   dạng thì dễ nhầm với số do game tự sinh.
+- Thư mục là SteamID64 viết bằng 16 ký tự hex (Dark Souls II / III, vd
+  `0110000106a00001`) được nhận ra và đổi như thư mục 17 chữ số.
+
+#### Id tài khoản nằm trong nội dung file
+
+Đổi thư mục là chưa đủ với save của FromSoftware (Sekiro, Elden Ring, Dark Souls
+II / III): game ghi SteamID64 của người chơi vào chính file `.sl2` và báo "Failed
+to load save data" khi id đó khác tài khoản đang chơi. `bnd4.rs` sửa việc này lúc
+khôi phục, bằng một logic cho mọi game, nhận file theo nội dung chứ không theo
+tên game:
+
+1. Đọc bảng mục của BND4 và kiểm mỗi mục mở đầu bằng MD5 của phần còn lại.
+2. Lấy bản rõ của từng mục. Mục mã hoá (IV + AES-128-CBC) được giải bằng khoá
+   tĩnh mà mọi mục giải ra đều hợp lý — không cần biết file của game nào.
+3. Tìm id của chủ save: tài khoản của thư mục chứa file, rồi tài khoản đã chụp.
+   Cần thứ tự này vì file còn ghi id của người chơi khác, và dữ liệu game có thể
+   tình cờ mang hình dạng một SteamID64.
+4. Thay id, mã hoá lại bằng cùng IV, tính lại MD5 của mục vừa đổi.
+5. Đọc lại kết quả và đòi nó khớp từng chỗ với dự tính; lệch thì bỏ, ghi nguyên
+   nội dung gốc và cảnh báo.
+
+Kho local và cloud vẫn giữ **nội dung gốc**: blob được đặt tên theo sha256 của
+nó. Bản đã sửa chỉ được ghi ra thư mục save, và "file trên đĩa đã đúng chưa" được
+so với sha256 của bản đã sửa. Tài khoản đích là tài khoản của thư mục file rơi
+vào, nên bản lưu chứa thư mục của hai tài khoản vẫn giữ file của ai cho người đó.
+
+Đã kiểm: Sekiro và Elden Ring nạp được trong game sau khi sửa; Dark Souls II /
+III mới kiểm ở mức file (sửa, mã hoá lại, đọc lại được). Dark Souls Remastered
+không ghi id trong file. File có id trong nội dung mà không thuộc định dạng này
+thì app chỉ cảnh báo (`embedded_id.rs`), không sửa.
 
 ### Tự cập nhật
 
